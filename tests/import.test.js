@@ -169,3 +169,92 @@ test('import backs up current data to a separate key first', () => {
   assert.deepEqual(JSON.parse(localStorage.getItem(result.backupKey)), current)
   assert.equal(Object.keys(loadData().days).length, 3)
 })
+
+// ---- Settings in export and import ----
+
+import { defaultSettings, loadSettings, saveSettings, addQuickItem, setProteinTarget, removeQuickItem, moveQuickItem } from '../src/settings.js'
+import { settingsChanges } from '../src/importData.js'
+
+// The Import button's full path, including settings replacement.
+function importWithSettings(text) {
+  const current = loadData()
+  const currentSettings = loadSettings()
+  const parsed = parseImport(text)
+  if (!parsed.ok) return parsed
+  return commitImport(current, mergeData(current, parsed.data), currentSettings, parsed.settings)
+}
+
+test('round trip with settings: export, import into empty storage, identical data and settings', () => {
+  const data = sample()
+  const settings = addQuickItem(setProteinTarget(defaultSettings(), 95), { name: 'Tofu', proteinG: 12 }, 'tofu')
+  const text = toExportJson(data, settings)
+  assert.equal(JSON.parse(text).version, 1)
+
+  const result = importWithSettings(text)
+  assert.equal(result.ok, true)
+  assert.deepEqual(loadData(), data)
+  assert.deepEqual(loadSettings(), settings)
+})
+
+test('import replaces settings rather than merging, and backs them up first', () => {
+  const mine = addQuickItem(defaultSettings(), { name: 'Eggs', proteinG: 12 }, 'eggs')
+  saveSettings(mine)
+  const theirs = setProteinTarget(removeQuickItem(defaultSettings(), 'qa-peanuts'), 100)
+  const result = importWithSettings(toExportJson(emptyData(), theirs))
+  assert.equal(result.ok, true)
+  assert.deepEqual(loadSettings(), theirs)
+  assert.equal(loadSettings().quickAdd.some((q) => q.id === 'eggs'), false)
+  assert.deepEqual(JSON.parse(localStorage.getItem(result.settingsBackupKey)), mine)
+})
+
+test('an export without settings leaves current settings alone', () => {
+  const mine = setProteinTarget(defaultSettings(), 110)
+  saveSettings(mine)
+  const result = importWithSettings(toExportJson(sample()))
+  assert.equal(result.ok, true)
+  assert.equal(result.settingsBackupKey, null)
+  assert.deepEqual(loadSettings(), mine)
+})
+
+test('invalid settings reject the whole file and change nothing', () => {
+  saveData(sample())
+  saveSettings(defaultSettings())
+  const before = localStorage.snapshot()
+  const good = defaultSettings()
+  const bad = [
+    { ...good, version: 2 },
+    { ...good, proteinTargetG: 0 },
+    { ...good, waterTargetBottles: 2.5 },
+    { ...good, quickAdd: 'nope' },
+    { ...good, quickAdd: [{ id: 'a', name: '', proteinG: 3 }] },
+    { ...good, quickAdd: [{ id: 'a', name: 'x', proteinG: 3 }, { id: 'a', name: 'y', proteinG: 3 }] },
+    'settings',
+  ]
+  for (const settings of bad) {
+    const result = importWithSettings(JSON.stringify({ version: 1, days: {}, settings }))
+    assert.equal(result.ok, false, JSON.stringify(settings))
+    assert.match(result.error, /^Settings /)
+    assert.deepEqual(localStorage.snapshot(), before)
+  }
+})
+
+test('settings changes are listed for the preview', () => {
+  const current = defaultSettings()
+  assert.equal(settingsChanges(current, null), null)
+  assert.deepEqual(settingsChanges(current, defaultSettings()), [])
+
+  let incoming = setProteinTarget(current, 90)
+  incoming = { ...incoming, waterTargetBottles: 4 }
+  incoming = removeQuickItem(incoming, 'qa-peanuts')
+  incoming = addQuickItem(incoming, { name: 'Tofu', proteinG: 12 }, 'tofu')
+  incoming = { ...incoming, quickAdd: incoming.quickAdd.map((q) => (q.id === 'qa-whey' ? { ...q, proteinG: 25 } : q)) }
+  incoming = moveQuickItem(incoming, 2, 0)
+  assert.deepEqual(settingsChanges(current, incoming), [
+    'Protein target: 80 g to 90 g',
+    'Water target: 3 to 4 bottles',
+    'Quick add, added: Tofu',
+    'Quick add, removed: Peanuts',
+    'Quick add, edited: Whey scoop',
+    'Quick add order changed',
+  ])
+})

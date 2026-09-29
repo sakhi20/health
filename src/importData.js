@@ -1,5 +1,6 @@
 // Parsing, validation, preview and merge for imported export files.
 // Pure functions: nothing here touches storage.
+import { isValidProteinTarget, isValidWaterTarget, isValidQuickItem } from './settings.js'
 
 const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/
 const HH_MM = /^([01]\d|2[0-3]):[0-5]\d$/
@@ -33,7 +34,23 @@ function fieldProblem(name, f) {
   return typeof f.value === 'string' && HH_MM.test(f.value) ? null : 'is not a HH:MM time'
 }
 
-// Returns { ok: true, data } with exportedAt stripped, or { ok: false, error }.
+function settingsProblem(s) {
+  if (!isObject(s)) return 'is not an object'
+  if (s.version !== 1) return `has unsupported version ${JSON.stringify(s.version)}`
+  if (!isValidProteinTarget(s.proteinTargetG)) return 'has an invalid protein target'
+  if (!isValidWaterTarget(s.waterTargetBottles)) return 'has an invalid water target'
+  if (!Array.isArray(s.quickAdd)) return 'has no quick add list'
+  const ids = new Set()
+  for (const [i, q] of s.quickAdd.entries()) {
+    if (!isValidQuickItem(q) || typeof q.id !== 'string' || q.id === '') return `quick add item ${i + 1} is invalid`
+    if (ids.has(q.id)) return `quick add id ${q.id} appears more than once`
+    ids.add(q.id)
+  }
+  return null
+}
+
+// Returns { ok: true, data, settings } with exportedAt stripped, or { ok: false, error }.
+// settings is null when the file has none (exports made before settings existed).
 export function parseImport(text) {
   let parsed
   try {
@@ -64,6 +81,19 @@ export function parseImport(text) {
     }
   }
 
+  let settings = null
+  if ('settings' in parsed) {
+    const problem = settingsProblem(parsed.settings)
+    if (problem) return { ok: false, error: `Settings ${problem}.` }
+    const { version, proteinTargetG, waterTargetBottles, quickAdd } = parsed.settings
+    settings = {
+      version,
+      proteinTargetG,
+      waterTargetBottles,
+      quickAdd: quickAdd.map((q) => ({ id: q.id, name: q.name.trim(), proteinG: q.proteinG })),
+    }
+  }
+
   const days = {}
   for (const [key, day] of Object.entries(parsed.days)) {
     days[key] = {
@@ -77,7 +107,33 @@ export function parseImport(text) {
       energy: day.energy,
     }
   }
-  return { ok: true, data: { version: 1, days } }
+  return { ok: true, data: { version: 1, days }, settings }
+}
+
+// Human-readable list of what replacing the current settings would change.
+// null: the file has no settings, so they are kept. []: identical.
+export function settingsChanges(current, incoming) {
+  if (incoming === null) return null
+  const changes = []
+  if (current.proteinTargetG !== incoming.proteinTargetG) {
+    changes.push(`Protein target: ${current.proteinTargetG} g to ${incoming.proteinTargetG} g`)
+  }
+  if (current.waterTargetBottles !== incoming.waterTargetBottles) {
+    changes.push(`Water target: ${current.waterTargetBottles} to ${incoming.waterTargetBottles} bottles`)
+  }
+  const cur = new Map(current.quickAdd.map((q) => [q.id, q]))
+  const inc = new Map(incoming.quickAdd.map((q) => [q.id, q]))
+  const added = incoming.quickAdd.filter((q) => !cur.has(q.id)).map((q) => q.name)
+  const removed = current.quickAdd.filter((q) => !inc.has(q.id)).map((q) => q.name)
+  const edited = incoming.quickAdd
+    .filter((q) => cur.has(q.id) && (cur.get(q.id).name !== q.name || cur.get(q.id).proteinG !== q.proteinG))
+    .map((q) => q.name)
+  if (added.length) changes.push(`Quick add, added: ${added.join(', ')}`)
+  if (removed.length) changes.push(`Quick add, removed: ${removed.join(', ')}`)
+  if (edited.length) changes.push(`Quick add, edited: ${edited.join(', ')}`)
+  const sharedOrder = (list, other) => list.filter((q) => other.has(q.id)).map((q) => q.id).join()
+  if (sharedOrder(current.quickAdd, inc) !== sharedOrder(incoming.quickAdd, cur)) changes.push('Quick add order changed')
+  return changes
 }
 
 const allIds = (data) => new Set(Object.values(data.days).flatMap((d) => d.entries.map((e) => e.id)))

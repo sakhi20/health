@@ -1,4 +1,6 @@
 const STORAGE_KEY = 'health:v1'
+// Duplicated from settings.js to avoid a circular import.
+const SETTINGS_KEY = 'health:settings'
 
 export const emptyData = () => ({ version: 1, days: {} })
 
@@ -7,6 +9,17 @@ export const emptyDay = () => ({ entries: [], bedtime: null, wakeTime: null, ene
 
 export const isDayEmpty = (day) =>
   day.entries.length === 0 && day.bedtime === null && day.wakeTime === null && day.energy === null
+
+// Applies fn to one day's record. A day left with nothing in it is removed,
+// so "unlogged" always means "no key", never an empty record.
+export function applyDayUpdate(data, dayKey, fn) {
+  const current = data.days[dayKey] ?? emptyDay()
+  const next = fn({ ...current, entries: [...current.entries] })
+  const days = { ...data.days }
+  if (isDayEmpty(next)) delete days[dayKey]
+  else days[dayKey] = next
+  return { ...data, days }
+}
 
 export function loadData() {
   let raw
@@ -53,31 +66,52 @@ export async function requestPersistentStorage() {
   }
 }
 
-// Backs up current data to its own key, then writes the merged result.
-// If the backup can't be written, nothing is changed.
-export function commitImport(current, merged) {
-  const backupKey = `${STORAGE_KEY}:backup:${new Date().toISOString()}`
+// Backs up current data (and settings, if they'll be replaced) to their own keys,
+// then writes the result. If a backup can't be written, nothing is changed.
+// Pass nextSettings = null to leave settings alone.
+export function commitImport(current, merged, currentSettings = null, nextSettings = null) {
+  const stamp = new Date().toISOString()
+  const backupKey = `${STORAGE_KEY}:backup:${stamp}`
+  const settingsBackupKey = `${SETTINGS_KEY}:backup:${stamp}`
   try {
     localStorage.setItem(backupKey, JSON.stringify(current))
+    if (nextSettings) localStorage.setItem(settingsBackupKey, JSON.stringify(currentSettings))
   } catch {
     return { ok: false, error: "Couldn't write a backup of your current data, so nothing was imported." }
   }
-  if (!saveData(merged)) {
-    return { ok: false, error: `Couldn't save the imported data. Your previous data is unchanged (backup at ${backupKey}).` }
+  if (nextSettings && !writeJson(SETTINGS_KEY, nextSettings)) {
+    return { ok: false, error: `Couldn't save the imported settings. Nothing was changed (backup at ${backupKey}).` }
   }
-  return { ok: true, backupKey }
+  if (!saveData(merged)) {
+    if (nextSettings) writeJson(SETTINGS_KEY, currentSettings)
+    return { ok: false, error: `Couldn't save the imported data. Nothing was changed (backup at ${backupKey}).` }
+  }
+  return { ok: true, backupKey, settingsBackupKey: nextSettings ? settingsBackupKey : null }
+}
+
+function writeJson(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value))
+    return true
+  } catch {
+    return false
+  }
 }
 
 const isStandalone = () =>
   window.matchMedia?.('(display-mode: standalone)').matches || navigator.standalone === true
 
-export const toExportJson = (data) => JSON.stringify({ ...data, exportedAt: new Date().toISOString() }, null, 2)
+// Still version 1: settings is an extra top-level field that older imports ignore.
+export const toExportJson = (data, settings) =>
+  JSON.stringify({ ...data, ...(settings ? { settings } : {}), exportedAt: new Date().toISOString() }, null, 2)
 
-export async function exportData(data) {
+// Resolves true once the file was handed to the share sheet or download,
+// false if the person cancelled the share sheet.
+export async function exportData(data, settings) {
   const d = new Date()
   const localDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
   const filename = `health-export-${localDate}.json`
-  const json = toExportJson(data)
+  const json = toExportJson(data, settings)
 
   // Downloads are unreliable inside an installed iOS home-screen app; the share sheet
   // offers "Save to Files" instead.
@@ -86,9 +120,9 @@ export async function exportData(data) {
     if (navigator.canShare?.({ files: [file] })) {
       try {
         await navigator.share({ files: [file] })
-        return
+        return true
       } catch (err) {
-        if (err?.name === 'AbortError') return
+        if (err?.name === 'AbortError') return false
       }
     }
   }
@@ -101,6 +135,7 @@ export async function exportData(data) {
   a.click()
   a.remove()
   setTimeout(() => URL.revokeObjectURL(url), 1000)
+  return true
 }
 
 // crypto.randomUUID is unavailable over plain http on a LAN IP, so don't rely on it.

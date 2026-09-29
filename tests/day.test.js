@@ -1,7 +1,7 @@
 // Run with TZ=America/New_York (see "npm test") so the DST cases hit real transitions.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { dayKeyFor, shiftDayKey } from '../src/day.js'
+import { dayKeyFor, shiftDayKey, formatClock } from '../src/day.js'
 
 test('4am day boundary', () => {
   const cases = [
@@ -20,4 +20,10 @@ test('4am day boundary', () => {
 test('shiftDayKey crosses month and year ends', () => {
   assert.equal(shiftDayKey('2026-03-01', -1), '2026-02-28')
   assert.equal(shiftDayKey('2026-01-01', -1), '2025-12-31')
+})
+
+test('formatClock shows stored times in 12-hour format', () => {
+  // Pinned to en-US so the result doesn't depend on the machine's locale.
+  const cases = [['23:30', '11:30 PM'], ['00:05', '12:05 AM'], ['12:00', '12:00 PM'], ['07:15', '7:15 AM']]
+  for (const [value, want] of cases) assert.equal(formatClock(value, 'en-US').replace(/\s/g, ' '), want, value)
 })

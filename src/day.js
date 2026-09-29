@@ -30,5 +30,15 @@ export function formatDayKey(key) {
 }
 
 export function formatTime(iso) {
-  return new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+  return new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+}
+
+export function formatDayKeyLong(key) {
+  return fromKey(key).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })
+}
+
+// A stored "HH:MM" value in the same 12-hour style as formatTime: "23:30" -> "11:30 PM".
+export function formatClock(hhmm, locale = undefined) {
+  const [h, m] = hhmm.split(':').map(Number)
+  return new Date(2000, 0, 1, h, m).toLocaleTimeString(locale, { hour: 'numeric', minute: '2-digit' })
 }

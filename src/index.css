@@ -1,7 +1,140 @@
 @import "tailwindcss";
 
-html,
-body {
-  background: #0f172a;
+/* iOS-style system colors, checked for WCAG contrast (text 4.5:1, bars 3:1). */
+:root {
+  color-scheme: light dark;
+  --canvas: #f2f2f7;
+  --surface: #ffffff;
+  --fill: #e9e9ee;
+  --track: #e5e5ea;
+  --label: #000000;
+  --label2: #6c6c70;
+  --label3: #8a8a8e;
+  --sep: #c6c6c8;
+  --tint: #0064d2;
+  --tint-fill: #0064d2;
+  --protein: #248a3d;
+  --water: #0071a4;
+  --amber: #9a5700;
+  --danger: #c4001a;
+  --overlay: rgb(0 0 0 / 0.32);
+  --bar: rgb(242 242 247 / 0.82);
+  --thumb: #ffffff;
+  /* Sheets sit one level up. */
+  --canvas-elev: #f2f2f7;
+  --surface-elev: #ffffff;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --canvas: #000000;
+    --surface: #1c1c1e;
+    --fill: #2c2c2e;
+    --track: #3a3a3c;
+    --label: #ffffff;
+    --label2: #aeaeb2;
+    --label3: #8d8d93;
+    --sep: #38383a;
+    --tint: #4da3ff;
+    --tint-fill: #0a6ad8;
+    --protein: #30d158;
+    --water: #64d2ff;
+    --amber: #ffb340;
+    --danger: #c4001a;
+    --overlay: rgb(0 0 0 / 0.6);
+    --bar: rgb(0 0 0 / 0.78);
+  --thumb: #5a5a5e;
+    --canvas-elev: #1c1c1e;
+    --surface-elev: #2c2c2e;
+  }
+}
+
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-fill: var(--fill);
+  --color-track: var(--track);
+  --color-label: var(--label);
+  --color-label2: var(--label2);
+  --color-label3: var(--label3);
+  --color-sep: var(--sep);
+  --color-tint: var(--tint);
+  --color-tint-fill: var(--tint-fill);
+  --color-protein: var(--protein);
+  --color-water: var(--water);
+  --color-amber: var(--amber);
+  --color-danger: var(--danger);
+  --color-overlay: var(--overlay);
+  --color-bar: var(--bar);
+  --color-thumb: var(--thumb);
+  --font-sans: -apple-system, BlinkMacSystemFont, system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-rounded: ui-rounded, -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-bounce: cubic-bezier(0.34, 1.3, 0.64, 1);
+}
+
+.elevated {
+  --canvas: var(--canvas-elev);
+  --surface: var(--surface-elev);
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  touch-action: manipulation; /* no double-tap zoom delay */
   -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  background: var(--canvas);
+  color: var(--label);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+[role="button"] {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* 16px or more stops iOS from zooming in when an input is focused. */
+input {
+  font-size: 17px;
+}
+
+/* Inset hairline between rows of a grouped list. */
+.grouped-row + .grouped-row::before,
+.grouped-list:not(:empty) + .grouped-row::before,
+.grouped-row + .grouped-list > .grouped-row:first-child::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: var(--sep-inset, 16px);
+  height: 1px;
+  transform: scaleY(0.5);
+  transform-origin: top;
+  background: var(--sep);
+  z-index: 1;
+}
+
+@keyframes row-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.98);
+  }
+}
+
+.row-enter {
+  animation: row-in 260ms var(--ease-spring);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }
