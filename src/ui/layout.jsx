@@ -130,3 +130,36 @@ export function useLiveAnnouncer() {
   }
   return [region, announce]
 }
+
+// iOS segmented control. The thumb slides with transform; value can be null (nothing picked).
+export function Segmented({ label, value, onChange, options }) {
+  const n = options.length
+  const index = options.findIndex(([v]) => v === value)
+  return (
+    <div
+      role="group"
+      aria-label={label}
+      className="relative grid h-12 rounded-[10px] bg-fill p-0.5"
+      style={{ gridTemplateColumns: `repeat(${n}, minmax(0, 1fr))` }}
+    >
+      <div
+        aria-hidden="true"
+        className={`absolute inset-y-0.5 left-0.5 rounded-[8px] bg-thumb shadow-[0_1px_3px_rgb(0_0_0/0.12)] transition duration-[260ms] ease-spring ${
+          index < 0 ? 'opacity-0' : 'opacity-100'
+        }`}
+        style={{ width: `calc((100% - 4px) / ${n})`, transform: `translateX(${Math.max(index, 0) * 100}%)` }}
+      />
+      {options.map(([v, text]) => (
+        <button
+          key={v}
+          type="button"
+          aria-pressed={v === value}
+          onClick={() => onChange(v)}
+          className={`relative text-[15px] transition-colors ${v === value ? 'font-semibold' : 'text-label2'}`}
+        >
+          {text}
+        </button>
+      ))}
+    </div>
+  )
+}

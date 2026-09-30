@@ -1,6 +1,7 @@
 const STORAGE_KEY = 'health:v1'
 // Duplicated from settings.js to avoid a circular import.
 const SETTINGS_KEY = 'health:settings'
+const WORKOUTS_KEY = 'health:workouts'
 
 export const emptyData = () => ({ version: 1, days: {} })
 
@@ -66,27 +67,42 @@ export async function requestPersistentStorage() {
   }
 }
 
-// Backs up current data (and settings, if they'll be replaced) to their own keys,
-// then writes the result. If a backup can't be written, nothing is changed.
-// Pass nextSettings = null to leave settings alone.
-export function commitImport(current, merged, currentSettings = null, nextSettings = null) {
+// Backs up current data (and settings and workouts, if they'll change) to their own keys,
+// then writes the result. If a backup or a write fails, everything is put back.
+// Pass nextSettings / nextWorkouts = null to leave them alone.
+export function commitImport(current, merged, currentSettings = null, nextSettings = null, currentWorkouts = null, nextWorkouts = null) {
   const stamp = new Date().toISOString()
   const backupKey = `${STORAGE_KEY}:backup:${stamp}`
   const settingsBackupKey = `${SETTINGS_KEY}:backup:${stamp}`
+  const workoutsBackupKey = `${WORKOUTS_KEY}:backup:${stamp}`
   try {
     localStorage.setItem(backupKey, JSON.stringify(current))
     if (nextSettings) localStorage.setItem(settingsBackupKey, JSON.stringify(currentSettings))
+    if (nextWorkouts) localStorage.setItem(workoutsBackupKey, JSON.stringify(currentWorkouts))
   } catch {
     return { ok: false, error: "Couldn't write a backup of your current data, so nothing was imported." }
+  }
+  const undo = () => {
+    if (nextSettings) writeJson(SETTINGS_KEY, currentSettings)
+    if (nextWorkouts) writeJson(WORKOUTS_KEY, currentWorkouts)
   }
   if (nextSettings && !writeJson(SETTINGS_KEY, nextSettings)) {
     return { ok: false, error: `Couldn't save the imported settings. Nothing was changed (backup at ${backupKey}).` }
   }
+  if (nextWorkouts && !writeJson(WORKOUTS_KEY, nextWorkouts)) {
+    undo()
+    return { ok: false, error: `Couldn't save the imported workouts. Nothing was changed (backup at ${backupKey}).` }
+  }
   if (!saveData(merged)) {
-    if (nextSettings) writeJson(SETTINGS_KEY, currentSettings)
+    undo()
     return { ok: false, error: `Couldn't save the imported data. Nothing was changed (backup at ${backupKey}).` }
   }
-  return { ok: true, backupKey, settingsBackupKey: nextSettings ? settingsBackupKey : null }
+  return {
+    ok: true,
+    backupKey,
+    settingsBackupKey: nextSettings ? settingsBackupKey : null,
+    workoutsBackupKey: nextWorkouts ? workoutsBackupKey : null,
+  }
 }
 
 function writeJson(key, value) {
@@ -101,17 +117,21 @@ function writeJson(key, value) {
 const isStandalone = () =>
   window.matchMedia?.('(display-mode: standalone)').matches || navigator.standalone === true
 
-// Still version 1: settings is an extra top-level field that older imports ignore.
-export const toExportJson = (data, settings) =>
-  JSON.stringify({ ...data, ...(settings ? { settings } : {}), exportedAt: new Date().toISOString() }, null, 2)
+// Still version 1: settings and workouts are extra top-level fields that older imports ignore.
+export const toExportJson = (data, settings, workouts) =>
+  JSON.stringify(
+    { ...data, ...(settings ? { settings } : {}), ...(workouts ? { workouts } : {}), exportedAt: new Date().toISOString() },
+    null,
+    2,
+  )
 
 // Resolves true once the file was handed to the share sheet or download,
 // false if the person cancelled the share sheet.
-export async function exportData(data, settings) {
+export async function exportData(data, settings, workouts) {
   const d = new Date()
   const localDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
   const filename = `health-export-${localDate}.json`
-  const json = toExportJson(data, settings)
+  const json = toExportJson(data, settings, workouts)
 
   // Downloads are unreliable inside an installed iOS home-screen app; the share sheet
   // offers "Save to Files" instead.

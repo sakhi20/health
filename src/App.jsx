@@ -4,11 +4,14 @@ import { dayKeyFor, shiftDayKey, formatDayKey, formatClock } from './day.js'
 import { loadData, saveData, exportData, applyDayUpdate, newId, requestPersistentStorage, commitImport } from './storage.js'
 import { loadSettings, saveSettings } from './settings.js'
 import { loadLastExport, saveLastExport, exportReminder } from './exportReminder.js'
-import { parseImport, previewImport, mergeData, settingsChanges } from './importData.js'
+import { parseImport, previewImport, mergeData, settingsChanges, previewWorkouts, mergeWorkouts } from './importData.js'
+import { loadWorkouts, saveWorkouts, putDay, removeDay, dayStatus, loadDraft } from './workouts.js'
 import { goingToBed } from './sleep.js'
 import { formatGrams } from './format.js'
 import { Today, BOTTLE_ML } from './Today.jsx'
 import { SettingsScreen } from './SettingsScreen.jsx'
+import { WorkoutScreen } from './WorkoutScreen.jsx'
+import { PushedScreen } from './ui/PushedScreen.jsx'
 import { Sheet } from './ui/Sheet.jsx'
 import { Group, Row, HeaderButton, useLiveAnnouncer } from './ui/layout.jsx'
 import { usePresence, SHEET_MS } from './ui/motion.js'
@@ -43,9 +46,14 @@ export default function App() {
   const [pendingImport, setPendingImport] = useState(null)
   const [importMessage, setImportMessage] = useState(null) // { ok, text }
   const [showSettings, setShowSettings] = useState(false)
+  const [workouts, setWorkouts] = useState(loadWorkouts)
+  const [workoutsSaveFailed, setWorkoutsSaveFailed] = useState(false)
+  const [workoutDay, setWorkoutDay] = useState(null) // day key the Workout screen is open for
+  const [draftDayKey, setDraftDayKey] = useState(() => loadDraft()?.dayKey ?? null)
   const fileInput = useRef(null)
-  const settingsButton = useRef(null)
+  const opener = useRef(null)
   const settingsScroll = useRef(null)
+  const workoutScroll = useRef(null)
   const [liveRegion, announce] = useLiveAnnouncer()
   const now = useNow()
 
@@ -56,6 +64,10 @@ export default function App() {
   useEffect(() => {
     setSettingsSaveFailed(!saveSettings(settings))
   }, [settings])
+
+  useEffect(() => {
+    setWorkoutsSaveFailed(!saveWorkouts(workouts))
+  }, [workouts])
 
   useEffect(() => {
     requestPersistentStorage().then(setStorageStatus)
@@ -92,7 +104,7 @@ export default function App() {
   }
 
   const doExport = async () => {
-    if (await exportData(data, settings)) {
+    if (await exportData(data, settings, workouts)) {
       const at = stamp()
       saveLastExport(at)
       setLastExport(at)
@@ -114,13 +126,16 @@ export default function App() {
       settings: result.settings,
       preview: previewImport(data, result.data),
       settingsChanges: settingsChanges(settings, result.settings),
+      workouts: result.workouts,
+      workoutPreview: previewWorkouts(workouts, result.workouts),
     })
   }
 
   const confirmImport = () => {
-    const { incoming, settings: nextSettings } = pendingImport
+    const { incoming, settings: nextSettings, workouts: incomingWorkouts } = pendingImport
     const merged = mergeData(data, incoming)
-    const result = commitImport(data, merged, settings, nextSettings)
+    const nextWorkouts = incomingWorkouts === null ? null : mergeWorkouts(workouts, incomingWorkouts)
+    const result = commitImport(data, merged, settings, nextSettings, workouts, nextWorkouts)
     setPendingImport(null)
     if (!result.ok) {
       setImportMessage({ ok: false, text: result.error })
@@ -128,21 +143,34 @@ export default function App() {
     }
     setData(merged)
     if (nextSettings) setSettings(nextSettings)
+    if (nextWorkouts) setWorkouts(nextWorkouts)
     setImportMessage({ ok: true, text: `Imported. Your previous data was backed up as ${result.backupKey}.` })
   }
 
   const closeSettings = useCallback(() => setShowSettings(false), [])
+  const closeWorkout = useCallback(() => setWorkoutDay(null), [])
   const settingsPanel = usePresence(showSettings, SHEET_MS)
-  const settingsCovering = settingsPanel.mounted && showSettings
+  const workoutPanel = usePresence(workoutDay !== null, SHEET_MS)
+  // Keep the day while the screen animates closed.
+  const shownWorkoutDay = useRef(null)
+  if (workoutDay) shownWorkoutDay.current = workoutDay
+  const covered = (settingsPanel.shown && showSettings) || (workoutPanel.shown && workoutDay !== null)
+  const anyMounted = settingsPanel.mounted || workoutPanel.mounted
 
+  // Focus goes back to whatever opened the screen.
   useEffect(() => {
-    if (!settingsPanel.mounted && !showSettings) settingsButton.current?.focus({ preventScroll: true })
-  }, [settingsPanel.mounted, showSettings])
+    if (!anyMounted) opener.current?.focus({ preventScroll: true })
+  }, [anyMounted])
+
+  const open = (fn) => (e) => {
+    opener.current = e?.currentTarget ?? null
+    fn()
+  }
 
   const banners = (
     <>
       <UpdatePrompt />
-      {(saveFailed || settingsSaveFailed) && (
+      {(saveFailed || settingsSaveFailed || workoutsSaveFailed) && (
         <div role="alert" className="mx-4 mt-4 flex gap-2 rounded-[10px] bg-surface px-4 py-3 text-[15px] text-danger dark:text-[#ff6961]">
           <WarningIcon size={20} />
           Couldn’t save to this browser’s storage. Export your data now.
@@ -153,7 +181,7 @@ export default function App() {
 
   return (
     <>
-      <div inert={settingsCovering && settingsPanel.shown} className="mx-auto max-w-xl">
+      <div inert={covered} className="mx-auto max-w-xl">
         <Today
           now={now}
           viewing={viewing}
@@ -167,10 +195,10 @@ export default function App() {
           onDelete={deleteEntry}
           onSetField={setField}
           onGoingToBed={logGoingToBed}
-          onOpenSettings={(e) => {
-            settingsButton.current = e?.currentTarget ?? null
-            setShowSettings(true)
-          }}
+          onOpenSettings={open(() => setShowSettings(true))}
+          workoutStatus={dayStatus(workouts, dayKey)}
+          workoutDraftOpen={draftDayKey === dayKey}
+          onOpenWorkout={open(() => setWorkoutDay(dayKey))}
           onExport={doExport}
           onImport={() => fileInput.current.click()}
           exportStatus={exportReminder(lastExport, now)}
@@ -180,22 +208,25 @@ export default function App() {
         />
       </div>
 
-      {settingsPanel.mounted && (
-        <div
-          ref={settingsScroll}
-          role="dialog"
-          aria-modal="true"
-          aria-label="Settings"
-          // No transform at all once shown: any transform would trap the sheets'
-          // position: fixed inside this scrolling panel.
-          style={{ transform: settingsPanel.shown ? 'none' : 'translateX(100%)' }}
-          className="fixed inset-0 z-30 overflow-y-auto overscroll-contain bg-canvas transition-transform duration-[320ms] ease-spring"
-        >
-          <div className="mx-auto max-w-xl">
-            <SettingsScreen settings={settings} onChange={setSettings} onBack={closeSettings} scrollRoot={settingsScroll} announce={announce} />
-          </div>
-        </div>
-      )}
+      <PushedScreen presence={settingsPanel} label="Settings" scrollRef={settingsScroll}>
+        <SettingsScreen settings={settings} onChange={setSettings} onBack={closeSettings} scrollRoot={settingsScroll} announce={announce} />
+      </PushedScreen>
+
+      <PushedScreen presence={workoutPanel} label="Workout" scrollRef={workoutScroll}>
+        {shownWorkoutDay.current && (
+          <WorkoutScreen
+            key={shownWorkoutDay.current}
+            dayKey={shownWorkoutDay.current}
+            workouts={workouts}
+            onSave={(key, value) => setWorkouts((w) => putDay(w, key, value))}
+            onRemove={(key) => setWorkouts((w) => removeDay(w, key))}
+            onBack={closeWorkout}
+            onDraftChange={setDraftDayKey}
+            scrollRoot={workoutScroll}
+            announce={announce}
+          />
+        )}
+      </PushedScreen>
 
       <ImportPreviewSheet pending={pendingImport} onCancel={() => setPendingImport(null)} onConfirm={confirmImport} />
       <input ref={fileInput} type="file" accept=".json,application/json" onChange={chooseImportFile} className="hidden" />
@@ -239,8 +270,14 @@ function ImportPreviewSheet({ pending, onCancel, onConfirm }) {
   if (pending) last.current = pending
   const p = last.current
   const changes = p?.settingsChanges ?? null
+  const wp = p?.workoutPreview ?? null
   const nothingNew =
-    p && p.preview.newEntries === 0 && p.preview.newDays === 0 && p.preview.fieldsUpdated === 0 && (changes === null || changes.length === 0)
+    p &&
+    p.preview.newEntries === 0 &&
+    p.preview.newDays === 0 &&
+    p.preview.fieldsUpdated === 0 &&
+    (changes === null || changes.length === 0) &&
+    (wp === null || wp.newDays + wp.updatedDays === 0)
 
   return (
     <Sheet
@@ -263,6 +300,24 @@ function ImportPreviewSheet({ pending, onCancel, onConfirm }) {
             <Stat label="New days" value={p.preview.newDays} />
             <Stat label="New entries" value={p.preview.newEntries} />
             <Stat label="Sleep or energy values updated" value={p.preview.fieldsUpdated} />
+          </Group>
+          <Group
+            header="Workouts"
+            footer={
+              wp === null
+                ? 'This file has no workouts. Your current workouts are kept.'
+                : 'Workout days are merged. Where both have the same day, the more recently saved one is kept.'
+            }
+          >
+            {wp === null ? (
+              <Row className="text-label2">Not included</Row>
+            ) : (
+              <>
+                <Stat label="Workout and rest days in file" value={wp.days} />
+                <Stat label="New days" value={wp.newDays} />
+                <Stat label="Days replaced by a newer save" value={wp.updatedDays} />
+              </>
+            )}
           </Group>
           <Group
             header="Settings"

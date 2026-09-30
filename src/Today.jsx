@@ -5,7 +5,7 @@ import { goingToBed } from './sleep.js'
 import { AnimatedList } from './ui/AnimatedList.jsx'
 import { SwipeRow } from './ui/SwipeRow.jsx'
 import { Sheet } from './ui/Sheet.jsx'
-import { NavBar, LargeTitle, Group, Row, RowButton, HeaderButton, ProgressBar } from './ui/layout.jsx'
+import { NavBar, LargeTitle, Group, Row, RowButton, HeaderButton, ProgressBar, Segmented } from './ui/layout.jsx'
 import {
   PlusIcon,
   SlidersIcon,
@@ -18,7 +18,10 @@ import {
   CheckCircleIcon,
   InfoIcon,
   ListIcon,
+  DumbbellIcon,
+  ChevronRightIcon,
 } from './ui/icons.jsx'
+import { SPLITS } from './exercises.js'
 
 export const BOTTLE_ML = 750
 
@@ -38,6 +41,9 @@ export function Today({
   onSetField,
   onGoingToBed,
   onOpenSettings,
+  workoutStatus,
+  workoutDraftOpen,
+  onOpenWorkout,
   onExport,
   onImport,
   exportStatus,
@@ -118,6 +124,10 @@ export function Today({
             }
           />
         </Row>
+      </Group>
+
+      <Group className="mt-4">
+        <WorkoutRow status={workoutStatus} draftOpen={workoutDraftOpen} onOpen={onOpenWorkout} />
       </Group>
 
       <Group header="Log" footer={sorted.length > 0 && 'Swipe left on an entry to delete it.'}>
@@ -240,30 +250,6 @@ export function Today({
   )
 }
 
-function Segmented({ label, value, onChange, options }) {
-  const index = options.findIndex(([v]) => v === value)
-  return (
-    <div role="group" aria-label={label} className="relative grid h-12 grid-cols-2 rounded-[10px] bg-fill p-0.5">
-      <div
-        aria-hidden="true"
-        className="absolute inset-y-0.5 left-0.5 w-[calc(50%-2px)] rounded-[8px] bg-thumb shadow-[0_1px_3px_rgb(0_0_0/0.12)] transition-transform duration-[260ms] ease-spring"
-        style={{ transform: `translateX(${index * 100}%)` }}
-      />
-      {options.map(([v, text]) => (
-        <button
-          key={v}
-          type="button"
-          aria-pressed={v === value}
-          onClick={() => onChange(v)}
-          className={`relative text-[15px] transition-colors ${v === value ? 'font-semibold' : 'text-label2'}`}
-        >
-          {text}
-        </button>
-      ))}
-    </div>
-  )
-}
-
 function Metric({ label, value, rest, detail, reached }) {
   return (
     <div>
@@ -291,6 +277,25 @@ function Metric({ label, value, rest, detail, reached }) {
         )}
       </p>
     </div>
+  )
+}
+
+function WorkoutRow({ status, draftOpen, onOpen }) {
+  const value =
+    status?.status === 'workout'
+      ? (SPLITS[status.split]?.name ?? status.split)
+      : status?.status === 'rest'
+        ? 'Rest day'
+        : draftOpen
+          ? 'Not saved yet'
+          : 'Not logged'
+  return (
+    <RowButton onClick={onOpen} aria-label={`Workout: ${value}`}>
+      <DumbbellIcon className="text-tint" />
+      <span className="flex-1">Workout</span>
+      <span className={status ? 'font-medium' : 'text-label2'}>{value}</span>
+      <ChevronRightIcon size={18} className="-mr-1 text-label3" />
+    </RowButton>
   )
 }
 
