@@ -7,18 +7,6 @@ const query = '(prefers-reduced-motion: reduce)'
 
 export const prefersReducedMotion = () => typeof window !== 'undefined' && window.matchMedia?.(query).matches
 
-export function useReducedMotion() {
-  const [reduced, setReduced] = useState(prefersReducedMotion)
-  useEffect(() => {
-    const mq = window.matchMedia?.(query)
-    if (!mq) return
-    const onChange = () => setReduced(mq.matches)
-    mq.addEventListener('change', onChange)
-    return () => mq.removeEventListener('change', onChange)
-  }, [])
-  return reduced
-}
-
 // Keeps something mounted while it animates out.
 // Returns { mounted, shown }: render when mounted, apply the "in" styles when shown.
 export function usePresence(open, ms) {
