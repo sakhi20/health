@@ -85,6 +85,12 @@ export const WarningIcon = (p) => (
   </Icon>
 )
 
+export const CheckIcon = (p) => (
+  <Icon {...p}>
+    <path d="M5 12.5l4.5 4.5L19 7.5" />
+  </Icon>
+)
+
 export const CheckCircleIcon = (p) => (
   <Icon {...p}>
     <circle cx="12" cy="12" r="9" />
@@ -123,12 +129,5 @@ export const DumbbellIcon = (p) => (
     <path d="M8 12h8" />
     <path d="M5 8.5v7M8 7v10M16 7v10M19 8.5v7" />
     <path d="M3 11v2M21 11v2" />
-  </Icon>
-)
-
-export const MinusCircleIcon = (p) => (
-  <Icon {...p}>
-    <circle cx="12" cy="12" r="9" />
-    <path d="M8 12h8" />
   </Icon>
 )

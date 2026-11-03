@@ -25,6 +25,9 @@ export function shiftDayKey(key, deltaDays) {
   return toKey(d)
 }
 
+// 0 = Sunday ... 6 = Saturday, for the calendar date the day started on.
+export const weekdayOf = (key) => fromKey(key).getDay()
+
 export function formatDayKey(key) {
   return fromKey(key).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })
 }

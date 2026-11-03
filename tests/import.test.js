@@ -262,7 +262,7 @@ test('settings changes are listed for the preview', () => {
 // ---- Workouts in export and import ----
 
 import { previewWorkouts, mergeWorkouts } from '../src/importData.js'
-import { emptyWorkouts, loadWorkouts, saveWorkouts, putDay, WORKOUTS_KEY } from '../src/workouts.js'
+import { emptyWorkouts, loadWorkouts, saveWorkouts, putSession } from '../src/workouts.js'
 
 // The Import button's full path, including workouts.
 function importAll(text) {
@@ -275,27 +275,26 @@ function importAll(text) {
   return commitImport(current, mergeData(current, parsed.data), currentSettings, parsed.settings, currentWorkouts, nextWorkouts)
 }
 
-const workoutDay = (updatedAt, reps = 10) => ({
-  status: 'workout',
-  split: 'legs',
+const sessionA = (updatedAt, reps = 10) => ({
+  workout: 'A',
   exercises: [
-    { exerciseId: 'goblet-squat', skipped: false, sets: [{ weightLb: 35, reps }, { weightLb: 35, reps: 8 }] },
-    { exerciseId: 'romanian-deadlift', skipped: true, sets: [] },
+    { id: 'dumbbell-bench-press', sets: [{ weightLb: 12.5, reps }, { weightLb: 12.5, reps: 8 }] },
+    { id: 'plank', sets: [{ seconds: 20, targetSec: 20 }] },
   ],
-  loggedAt: '2026-09-27T22:00:00.000Z',
+  walkMin: 10,
+  loggedAt: '2026-11-03T22:00:00.000Z',
   updatedAt,
 })
-const bandDay = {
-  status: 'workout',
-  split: 'pull',
-  exercises: [{ exerciseId: 'banded-row', skipped: false, sets: [{ band: 'medium', reps: 15 }] }],
-  loggedAt: '2026-09-26T22:00:00.000Z',
-  updatedAt: '2026-09-26T22:00:00.000Z',
+const sessionB = {
+  workout: 'B',
+  exercises: [{ id: 'leg-curl', sets: [{ weightLb: 40, reps: 10 }] }],
+  walkMin: null,
+  loggedAt: '2026-11-05T22:00:00.000Z',
+  updatedAt: '2026-11-05T22:00:00.000Z',
 }
-const restDayValue = { status: 'rest', loggedAt: '2026-09-25T20:00:00.000Z', updatedAt: '2026-09-25T20:00:00.000Z' }
 const sampleWorkouts = () => ({
-  version: 1,
-  days: { '2026-09-27': workoutDay('2026-09-27T22:00:00.000Z'), '2026-09-26': bandDay, '2026-09-25': restDayValue },
+  version: 2,
+  sessions: { '2026-11-03': sessionA('2026-11-03T22:00:00.000Z'), '2026-11-05': sessionB },
 })
 
 test('round trip with workouts: export, import into empty storage, everything identical', () => {
@@ -311,13 +310,18 @@ test('round trip with workouts: export, import into empty storage, everything id
 })
 
 test('old export files still import without error and leave workouts alone', () => {
-  const mine = putDay(emptyWorkouts(), '2026-09-27', workoutDay('2026-09-27T22:00:00.000Z'))
+  const mine = putSession(emptyWorkouts(), '2026-11-03', sessionA('2026-11-03T22:00:00.000Z'))
   saveWorkouts(mine)
   // Pass 1 format: log only.
   const pass1 = '{"version":1,"days":{"2026-09-20":{"entries":[{"id":"x1","type":"food","name":"Peanuts","proteinG":6,"loggedAt":"2026-09-20T13:00:00.000Z"}],"bedtime":null,"wakeTime":null,"energy":null}},"exportedAt":"2026-09-21T00:00:00.000Z"}'
   // Pass 3 format: log plus settings.
   const pass3 = JSON.stringify({ ...sample(), settings: defaultSettings(), exportedAt: '2026-09-29T00:00:00.000Z' })
-  for (const text of [pass1, pass3]) {
+  // Push/pull/legs format: version 1 workouts are ignored, not rejected.
+  const pass4 = JSON.stringify({
+    ...sample(),
+    workouts: { version: 1, days: { '2026-09-25': { status: 'rest', loggedAt: '2026-09-25T20:00:00.000Z', updatedAt: '2026-09-25T20:00:00.000Z' } } },
+  })
+  for (const text of [pass1, pass3, pass4]) {
     const result = importAll(text)
     assert.equal(result.ok, true)
     assert.equal(result.workoutsBackupKey, null)
@@ -326,59 +330,62 @@ test('old export files still import without error and leave workouts alone', () 
   assert.ok(loadData().days['2026-09-20'])
 })
 
-test('workout merge: new days added, the later updatedAt wins, nothing removed', () => {
-  const current = { version: 1, days: { '2026-09-27': workoutDay('2026-09-27T22:00:00.000Z', 10), '2026-09-24': restDayValue } }
+test('workout merge: new sessions added, the later updatedAt wins, nothing removed', () => {
+  const older = { ...sessionB, workout: 'A', loggedAt: '2026-11-01T00:00:00.000Z', updatedAt: '2026-11-01T00:00:00.000Z' }
+  const current = { version: 2, sessions: { '2026-11-03': sessionA('2026-11-03T22:00:00.000Z', 10), '2026-10-31': sessionB } }
   const incoming = {
-    version: 1,
-    days: {
-      '2026-09-27': workoutDay('2026-09-28T09:00:00.000Z', 12), // edited later on another device: wins
-      '2026-09-24': { ...restDayValue, updatedAt: '2026-09-01T00:00:00.000Z' }, // older: loses
-      '2026-09-26': bandDay, // new
+    version: 2,
+    sessions: {
+      '2026-11-03': sessionA('2026-11-04T09:00:00.000Z', 12), // edited later on another device: wins
+      '2026-10-31': older, // older: loses
+      '2026-11-05': sessionB, // new
     },
   }
-  assert.deepEqual(previewWorkouts(current, incoming), { days: 3, newDays: 1, updatedDays: 1 })
+  assert.deepEqual(previewWorkouts(current, incoming), { sessions: 3, newSessions: 1, updatedSessions: 1 })
   assert.equal(previewWorkouts(current, null), null)
   const merged = mergeWorkouts(current, incoming)
-  assert.equal(merged.days['2026-09-27'].exercises[0].sets[0].reps, 12)
-  assert.equal(merged.days['2026-09-24'], current.days['2026-09-24'])
-  assert.deepEqual(merged.days['2026-09-26'], bandDay)
+  assert.equal(merged.sessions['2026-11-03'].exercises[0].sets[0].reps, 12)
+  assert.equal(merged.sessions['2026-10-31'], current.sessions['2026-10-31'])
+  assert.deepEqual(merged.sessions['2026-11-05'], sessionB)
   assert.equal(mergeWorkouts(current, null), current)
 })
 
 test('import backs up workouts before changing them', () => {
-  const mine = putDay(emptyWorkouts(), '2026-09-20', restDayValue)
+  const mine = putSession(emptyWorkouts(), '2026-10-31', sessionB)
   saveWorkouts(mine)
   const result = importAll(toExportJson(emptyData(), null, sampleWorkouts()))
   assert.equal(result.ok, true)
   assert.deepEqual(JSON.parse(localStorage.getItem(result.workoutsBackupKey)), mine)
-  assert.equal(Object.keys(loadWorkouts().days).length, 4)
+  assert.equal(Object.keys(loadWorkouts().sessions).length, 3)
 })
 
 test('malformed workouts reject the whole file and change nothing', () => {
   saveData(sample())
   saveWorkouts(sampleWorkouts())
   const before = localStorage.snapshot()
-  const w = (days) => JSON.stringify({ version: 1, days: {}, workouts: { version: 1, days } })
-  const wd = workoutDay('2026-09-27T22:00:00.000Z')
-  const withSet = (set) => ({ ...wd, exercises: [{ exerciseId: 'goblet-squat', skipped: false, sets: [set] }] })
+  const w = (sessions) => JSON.stringify({ version: 1, days: {}, workouts: { version: 2, sessions } })
+  const s = sessionA('2026-11-03T22:00:00.000Z')
+  const withSet = (set) => ({ ...s, exercises: [{ id: 'leg-press', sets: [set] }] })
   const bad = [
     JSON.stringify({ version: 1, days: {}, workouts: [] }),
+    JSON.stringify({ version: 1, days: {}, workouts: { version: 3, sessions: {} } }),
     JSON.stringify({ version: 1, days: {}, workouts: { version: 2, days: {} } }),
-    w({ '27-09-2026': wd }),
-    w({ '2026-09-27': { ...wd, status: 'maybe' } }),
-    w({ '2026-09-27': { ...wd, split: 'arms' } }),
-    w({ '2026-09-27': { ...wd, updatedAt: 'later' } }),
-    w({ '2026-09-27': { ...wd, exercises: 'none' } }),
-    w({ '2026-09-27': { ...wd, exercises: [wd.exercises[0], wd.exercises[0]] } }),
-    w({ '2026-09-27': { ...wd, exercises: [{ exerciseId: '', skipped: false, sets: [] }] } }),
-    w({ '2026-09-27': withSet({ weightLb: 35, reps: 0 }) }),
-    w({ '2026-09-27': withSet({ weightLb: 35, reps: 8.5 }) }),
-    w({ '2026-09-27': withSet({ weightLb: -1, reps: 8 }) }),
-    w({ '2026-09-27': withSet({ weightLb: '35', reps: 8 }) }),
-    w({ '2026-09-27': withSet({ band: 'extra heavy', reps: 8 }) }),
-    w({ '2026-09-27': withSet({ weightLb: 35, band: 'light', reps: 8 }) }),
-    w({ '2026-09-27': withSet({ reps: 8 }) }),
-    w({ '2026-09-25': { status: 'rest' } }),
+    w({ '03-11-2026': s }),
+    w({ '2026-11-03': { ...s, workout: 'C' } }),
+    w({ '2026-11-03': { ...s, updatedAt: 'later' } }),
+    w({ '2026-11-03': { ...s, walkMin: 0 } }),
+    w({ '2026-11-03': { ...s, walkMin: '10' } }),
+    w({ '2026-11-03': { ...s, exercises: 'none' } }),
+    w({ '2026-11-03': { ...s, exercises: [s.exercises[0], s.exercises[0]] } }),
+    w({ '2026-11-03': { ...s, exercises: [{ id: '', sets: [{ weightLb: 10, reps: 10 }] }] } }),
+    w({ '2026-11-03': { ...s, exercises: [{ id: 'leg-press', sets: [] }] } }),
+    w({ '2026-11-03': withSet({ weightLb: 35, reps: 0 }) }),
+    w({ '2026-11-03': withSet({ weightLb: 35, reps: 8.5 }) }),
+    w({ '2026-11-03': withSet({ weightLb: -1, reps: 8 }) }),
+    w({ '2026-11-03': withSet({ weightLb: '35', reps: 8 }) }),
+    w({ '2026-11-03': withSet({ reps: 8 }) }),
+    w({ '2026-11-03': withSet({ seconds: 20 }) }),
+    w({ '2026-11-03': withSet({ seconds: 0, targetSec: 20 }) }),
   ]
   for (const text of bad) {
     const result = importAll(text)

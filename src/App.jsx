@@ -5,7 +5,7 @@ import { loadData, saveData, exportData, applyDayUpdate, newId, requestPersisten
 import { loadSettings, saveSettings } from './settings.js'
 import { loadLastExport, saveLastExport, exportReminder } from './exportReminder.js'
 import { parseImport, previewImport, mergeData, settingsChanges, previewWorkouts, mergeWorkouts } from './importData.js'
-import { loadWorkouts, saveWorkouts, putDay, removeDay, dayStatus, loadDraft } from './workouts.js'
+import { loadWorkouts, saveWorkouts, putSession, removeSession, daySummary, loadDraft } from './workouts.js'
 import { goingToBed } from './sleep.js'
 import { formatGrams } from './format.js'
 import { Today, BOTTLE_ML } from './Today.jsx'
@@ -196,7 +196,7 @@ export default function App() {
           onSetField={setField}
           onGoingToBed={logGoingToBed}
           onOpenSettings={open(() => setShowSettings(true))}
-          workoutStatus={dayStatus(workouts, dayKey)}
+          workoutSummary={daySummary(workouts, dayKey)}
           workoutDraftOpen={draftDayKey === dayKey}
           onOpenWorkout={open(() => setWorkoutDay(dayKey))}
           onExport={doExport}
@@ -218,8 +218,8 @@ export default function App() {
             key={shownWorkoutDay.current}
             dayKey={shownWorkoutDay.current}
             workouts={workouts}
-            onSave={(key, value) => setWorkouts((w) => putDay(w, key, value))}
-            onRemove={(key) => setWorkouts((w) => removeDay(w, key))}
+            onSave={(key, value) => setWorkouts((w) => putSession(w, key, value))}
+            onRemove={(key) => setWorkouts((w) => removeSession(w, key))}
             onBack={closeWorkout}
             onDraftChange={setDraftDayKey}
             scrollRoot={workoutScroll}
@@ -277,7 +277,7 @@ function ImportPreviewSheet({ pending, onCancel, onConfirm }) {
     p.preview.newDays === 0 &&
     p.preview.fieldsUpdated === 0 &&
     (changes === null || changes.length === 0) &&
-    (wp === null || wp.newDays + wp.updatedDays === 0)
+    (wp === null || wp.newSessions + wp.updatedSessions === 0)
 
   return (
     <Sheet
@@ -306,16 +306,16 @@ function ImportPreviewSheet({ pending, onCancel, onConfirm }) {
             footer={
               wp === null
                 ? 'This file has no workouts. Your current workouts are kept.'
-                : 'Workout days are merged. Where both have the same day, the more recently saved one is kept.'
+                : 'Workout sessions are merged. Where both have one for the same day, the more recently saved one is kept.'
             }
           >
             {wp === null ? (
               <Row className="text-label2">Not included</Row>
             ) : (
               <>
-                <Stat label="Workout and rest days in file" value={wp.days} />
-                <Stat label="New days" value={wp.newDays} />
-                <Stat label="Days replaced by a newer save" value={wp.updatedDays} />
+                <Stat label="Sessions in file" value={wp.sessions} />
+                <Stat label="New sessions" value={wp.newSessions} />
+                <Stat label="Sessions replaced by a newer save" value={wp.updatedSessions} />
               </>
             )}
           </Group>

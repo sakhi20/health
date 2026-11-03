@@ -21,7 +21,6 @@ import {
   DumbbellIcon,
   ChevronRightIcon,
 } from './ui/icons.jsx'
-import { SPLITS } from './exercises.js'
 
 export const BOTTLE_ML = 750
 
@@ -41,7 +40,7 @@ export function Today({
   onSetField,
   onGoingToBed,
   onOpenSettings,
-  workoutStatus,
+  workoutSummary,
   workoutDraftOpen,
   onOpenWorkout,
   onExport,
@@ -127,7 +126,7 @@ export function Today({
       </Group>
 
       <Group className="mt-4">
-        <WorkoutRow status={workoutStatus} draftOpen={workoutDraftOpen} onOpen={onOpenWorkout} />
+        <WorkoutRow summary={workoutSummary} draftOpen={workoutDraftOpen} onOpen={onOpenWorkout} />
       </Group>
 
       <Group header="Log" footer={sorted.length > 0 && 'Swipe left on an entry to delete it.'}>
@@ -280,20 +279,20 @@ function Metric({ label, value, rest, detail, reached }) {
   )
 }
 
-function WorkoutRow({ status, draftOpen, onOpen }) {
-  const value =
-    status?.status === 'workout'
-      ? (SPLITS[status.split]?.name ?? status.split)
-      : status?.status === 'rest'
-        ? 'Rest day'
-        : draftOpen
-          ? 'Not saved yet'
-          : 'Not logged'
+function WorkoutRow({ summary, draftOpen, onOpen }) {
+  const { logged, workout, gymDay } = summary
+  const value = logged
+    ? `${workout} done`
+    : draftOpen
+      ? `${workout} in progress`
+      : gymDay
+        ? `${workout} not logged`
+        : 'Rest day'
   return (
     <RowButton onClick={onOpen} aria-label={`Workout: ${value}`}>
       <DumbbellIcon className="text-tint" />
       <span className="flex-1">Workout</span>
-      <span className={status ? 'font-medium' : 'text-label2'}>{value}</span>
+      <span className={logged ? 'font-medium' : 'text-label2'}>{value}</span>
       <ChevronRightIcon size={18} className="-mr-1 text-label3" />
     </RowButton>
   )

@@ -1,8 +1,7 @@
 // Parsing, validation, preview and merge for imported export files.
 // Pure functions: nothing here touches storage.
 import { isValidProteinTarget, isValidWaterTarget, isValidQuickItem } from './settings.js'
-import { SPLITS, BAND_LEVELS } from './exercises.js'
-import { MAX_REPS, MAX_WEIGHT_LB } from './workouts.js'
+import { MAX_REPS, MAX_WEIGHT_LB, MAX_SECONDS, MAX_WALK_MIN } from './workouts.js'
 
 const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/
 const HH_MM = /^([01]\d|2[0-3]):[0-5]\d$/
@@ -51,54 +50,52 @@ function settingsProblem(s) {
   return null
 }
 
+const isWholeIn = (v, min, max) => Number.isInteger(v) && v >= min && v <= max
+
 function setProblem(s) {
   if (!isObject(s)) return 'is not an object'
-  if (!Number.isInteger(s.reps) || s.reps < 1 || s.reps > MAX_REPS) return 'has invalid reps'
-  const hasWeight = 'weightLb' in s
-  const hasBand = 'band' in s
-  if (hasWeight === hasBand) return 'needs either a weight or a band'
-  if (hasWeight && (typeof s.weightLb !== 'number' || !Number.isFinite(s.weightLb) || s.weightLb < 0 || s.weightLb > MAX_WEIGHT_LB)) {
+  if ('seconds' in s) {
+    if (!isWholeIn(s.seconds, 1, MAX_SECONDS)) return 'has invalid seconds'
+    if (!isWholeIn(s.targetSec, 1, MAX_SECONDS)) return 'has an invalid target'
+    return null
+  }
+  if (!isWholeIn(s.reps, 1, MAX_REPS)) return 'has invalid reps'
+  if (typeof s.weightLb !== 'number' || !Number.isFinite(s.weightLb) || s.weightLb < 0 || s.weightLb > MAX_WEIGHT_LB) {
     return 'has an invalid weight'
   }
-  if (hasBand && !BAND_LEVELS.includes(s.band)) return 'has an invalid band'
   return null
 }
 
-function workoutDayProblem(day) {
-  if (!isObject(day)) return 'is not an object'
-  if (!isIso(day.loggedAt) || !isIso(day.updatedAt)) return 'has an invalid timestamp'
-  if (day.status === 'rest') return null
-  if (day.status !== 'workout') return `has unknown status ${JSON.stringify(day.status)}`
-  if (!(day.split in SPLITS)) return `has unknown split ${JSON.stringify(day.split)}`
-  if (!Array.isArray(day.exercises)) return 'has no exercise list'
+function sessionProblem(session) {
+  if (!isObject(session)) return 'is not an object'
+  if (!isIso(session.loggedAt) || !isIso(session.updatedAt)) return 'has an invalid timestamp'
+  if (session.workout !== 'A' && session.workout !== 'B') return `has unknown workout ${JSON.stringify(session.workout)}`
+  if (session.walkMin !== null && !isWholeIn(session.walkMin, 1, MAX_WALK_MIN)) return 'has an invalid walk'
+  if (!Array.isArray(session.exercises)) return 'has no exercise list'
   const seen = new Set()
-  for (const [i, ex] of day.exercises.entries()) {
-    if (!isObject(ex) || typeof ex.exerciseId !== 'string' || ex.exerciseId === '') return `exercise ${i + 1} has no id`
-    if (seen.has(ex.exerciseId)) return `lists ${ex.exerciseId} twice`
-    seen.add(ex.exerciseId)
-    if (typeof ex.skipped !== 'boolean' || !Array.isArray(ex.sets)) return `exercise ${ex.exerciseId} is malformed`
+  for (const [i, ex] of session.exercises.entries()) {
+    if (!isObject(ex) || typeof ex.id !== 'string' || ex.id === '') return `exercise ${i + 1} has no id`
+    if (seen.has(ex.id)) return `lists ${ex.id} twice`
+    seen.add(ex.id)
+    if (!Array.isArray(ex.sets) || ex.sets.length === 0) return `exercise ${ex.id} has no sets`
     for (const [j, set] of ex.sets.entries()) {
       const problem = setProblem(set)
-      if (problem) return `${ex.exerciseId}, set ${j + 1} ${problem}`
+      if (problem) return `${ex.id}, set ${j + 1} ${problem}`
     }
   }
   return null
 }
 
-function cleanWorkoutDay(day) {
-  if (day.status === 'rest') return { status: 'rest', loggedAt: day.loggedAt, updatedAt: day.updatedAt }
-  return {
-    status: 'workout',
-    split: day.split,
-    exercises: day.exercises.map((ex) => ({
-      exerciseId: ex.exerciseId,
-      skipped: ex.skipped,
-      sets: ex.sets.map((s) => ('band' in s ? { band: s.band, reps: s.reps } : { weightLb: s.weightLb, reps: s.reps })),
-    })),
-    loggedAt: day.loggedAt,
-    updatedAt: day.updatedAt,
-  }
-}
+const cleanSession = (s) => ({
+  workout: s.workout,
+  exercises: s.exercises.map((ex) => ({
+    id: ex.id,
+    sets: ex.sets.map((x) => ('seconds' in x ? { seconds: x.seconds, targetSec: x.targetSec } : { weightLb: x.weightLb, reps: x.reps })),
+  })),
+  walkMin: s.walkMin,
+  loggedAt: s.loggedAt,
+  updatedAt: s.updatedAt,
+})
 
 // Returns { ok: true, data, settings, workouts } with exportedAt stripped, or { ok: false, error }.
 // settings and workouts are null when the file has none (older exports).
@@ -145,16 +142,17 @@ export function parseImport(text) {
     }
   }
 
+  // Version 1 workouts (the retired push/pull/legs format) are ignored.
   let workouts = null
-  if ('workouts' in parsed) {
+  if ('workouts' in parsed && !(isObject(parsed.workouts) && parsed.workouts.version === 1)) {
     const w = parsed.workouts
-    if (!isObject(w) || w.version !== 1 || !isObject(w.days)) return { ok: false, error: 'Workouts are not in the expected format.' }
-    for (const [key, day] of Object.entries(w.days)) {
-      if (!DAY_KEY.test(key)) return { ok: false, error: `Workout day "${key}" is not a YYYY-MM-DD date.` }
-      const problem = workoutDayProblem(day)
+    if (!isObject(w) || w.version !== 2 || !isObject(w.sessions)) return { ok: false, error: 'Workouts are not in the expected format.' }
+    for (const [key, session] of Object.entries(w.sessions)) {
+      if (!DAY_KEY.test(key)) return { ok: false, error: `Workout session "${key}" is not a YYYY-MM-DD date.` }
+      const problem = sessionProblem(session)
       if (problem) return { ok: false, error: `Workout on ${key} ${problem}.` }
     }
-    workouts = { version: 1, days: Object.fromEntries(Object.entries(w.days).map(([k, d]) => [k, cleanWorkoutDay(d)])) }
+    workouts = { version: 2, sessions: Object.fromEntries(Object.entries(w.sessions).map(([k, x]) => [k, cleanSession(x)])) }
   }
 
   const days = {}
@@ -173,25 +171,25 @@ export function parseImport(text) {
   return { ok: true, data: { version: 1, days }, settings, workouts }
 }
 
-// A workout day from the file wins only if this device has none, or has an older one.
-const takeWorkoutDay = (current, incoming) => !current || Date.parse(incoming.updatedAt) > Date.parse(current.updatedAt)
+// A session from the file wins only if this device has none for that day, or an older one.
+const takeSession = (current, incoming) => !current || Date.parse(incoming.updatedAt) > Date.parse(current.updatedAt)
 
 // null when the file has no workouts.
 export function previewWorkouts(current, incoming) {
   if (incoming === null) return null
-  const keys = Object.keys(incoming.days)
+  const keys = Object.keys(incoming.sessions)
   return {
-    days: keys.length,
-    newDays: keys.filter((k) => !current.days[k]).length,
-    updatedDays: keys.filter((k) => current.days[k] && takeWorkoutDay(current.days[k], incoming.days[k])).length,
+    sessions: keys.length,
+    newSessions: keys.filter((k) => !current.sessions[k]).length,
+    updatedSessions: keys.filter((k) => current.sessions[k] && takeSession(current.sessions[k], incoming.sessions[k])).length,
   }
 }
 
 export function mergeWorkouts(current, incoming) {
   if (incoming === null) return current
-  const days = { ...current.days }
-  for (const [key, day] of Object.entries(incoming.days)) if (takeWorkoutDay(days[key], day)) days[key] = day
-  return { ...current, days }
+  const sessions = { ...current.sessions }
+  for (const [key, session] of Object.entries(incoming.sessions)) if (takeSession(sessions[key], session)) sessions[key] = session
+  return { ...current, sessions }
 }
 
 // Human-readable list of what replacing the current settings would change.

@@ -1,153 +1,165 @@
 import { useEffect, useState } from 'react'
 import { formatDayKey, formatDayKeyLong, formatTime } from './day.js'
-import { SPLITS, BAND_LEVELS } from './exercises.js'
+import { formatNumber } from './format.js'
+import { GYM_WEEKDAYS, REST_SECONDS, WORKOUTS } from './program.js'
 import {
-  buildExercises,
-  blankSet,
-  draftToWorkout,
-  restDay,
+  buildDraft,
+  switchWorkout,
+  sessionFromDraft,
+  draftHasDone,
+  parseSet,
+  prefill,
+  exerciseDef,
   exerciseName,
-  exerciseKind,
-  lastSession,
+  isGymDay,
+  nextWorkout,
+  removeSession,
   loadDraft,
   saveDraft,
 } from './workouts.js'
-import { NavBar, LargeTitle, HeaderButton, RowButton, Segmented } from './ui/layout.jsx'
-import { ChevronLeftIcon, ChevronRightIcon, PlusIcon, MinusCircleIcon, WarningIcon, DumbbellIcon } from './ui/icons.jsx'
+import { NavBar, HeaderButton, RowButton, Segmented } from './ui/layout.jsx'
+import { ChevronLeftIcon, WarningIcon, CheckIcon, MoonIcon } from './ui/icons.jsx'
 
-const CHOICES = [
-  ['push', 'Push'],
-  ['pull', 'Pull'],
-  ['legs', 'Legs'],
-  ['rest', 'Rest'],
+const WORKOUT_OPTIONS = [
+  ['A', 'A'],
+  ['B', 'B'],
 ]
-const BAND_NAMES = { light: 'Light', medium: 'Medium', heavy: 'Heavy' }
 
-// The draft for this day: unsaved edits if there are any, otherwise what's saved.
-function initialDraft(workouts, dayKey) {
+// Unsaved taps for this day if there are any, otherwise the saved session or a fresh prefill.
+function initialState(workouts, dayKey) {
   const stored = loadDraft()
-  if (stored?.dayKey === dayKey) return { draft: stored, dirty: true }
-  const saved = workouts.days[dayKey]
-  if (!saved) return { draft: { dayKey, choice: null, bySplit: {} }, dirty: false }
-  if (saved.status === 'rest') return { draft: { dayKey, choice: 'rest', bySplit: {} }, dirty: false }
-  return { draft: { dayKey, choice: saved.split, bySplit: { [saved.split]: buildExercises(workouts, dayKey, saved.split) } }, dirty: false }
+  if (stored?.dayKey === dayKey) return { draft: stored, dirty: true, logging: true }
+  return { draft: buildDraft(workouts, dayKey), dirty: false, logging: isGymDay(dayKey) || Boolean(workouts.sessions[dayKey]) }
 }
 
 export function WorkoutScreen({ dayKey, workouts, onSave, onRemove, onBack, onDraftChange, scrollRoot, announce }) {
-  const [{ draft, dirty }, setState] = useState(() => initialDraft(workouts, dayKey))
+  const [{ draft, dirty, logging }, setState] = useState(() => initialState(workouts, dayKey))
   const [error, setError] = useState(null)
   const [confirmRemove, setConfirmRemove] = useState(false)
-  const saved = workouts.days[dayKey] ?? null
-  const choice = draft.choice
-  const exercises = choice && choice !== 'rest' ? draft.bySplit[choice] : null
+  const [now, setNow] = useState(() => Date.now())
+  const saved = workouts.sessions[dayKey] ?? null
+  const exercises = draft.byWorkout[draft.workout]
 
-  // Unsaved edits are kept, so closing the app between sets loses nothing.
+  // Unsaved taps are kept, so closing the app between sets loses nothing.
   useEffect(() => {
     if (!dirty) return
     saveDraft(draft)
     onDraftChange(draft.dayKey)
   }, [draft, dirty, onDraftChange])
 
+  const restLeft = draft.restEndsAt ? Math.min(REST_SECONDS, Math.ceil((draft.restEndsAt - now) / 1000)) : 0
+  useEffect(() => {
+    if (restLeft <= 0) return
+    const id = setInterval(() => setNow(Date.now()), 250)
+    return () => clearInterval(id)
+  }, [restLeft > 0]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const edit = (fn) => {
     setError(null)
     setConfirmRemove(false)
-    setState((s) => ({ draft: fn(s.draft), dirty: true }))
+    setState((s) => ({ ...s, draft: fn(s.draft), dirty: true }))
   }
 
-  const pick = (next) =>
-    edit((d) => ({
-      ...d,
-      choice: next,
-      bySplit: next === 'rest' || d.bySplit[next] ? d.bySplit : { ...d.bySplit, [next]: buildExercises(workouts, dayKey, next) },
-    }))
+  const changeSet = (d, exId, i, fn) => ({
+    ...d,
+    byWorkout: {
+      ...d.byWorkout,
+      [d.workout]: d.byWorkout[d.workout].map((e) => (e.id === exId ? { ...e, sets: e.sets.map((s, j) => (j === i ? fn(s) : s)) } : e)),
+    },
+  })
 
-  const updateExercise = (id, fn) =>
-    edit((d) => ({ ...d, bySplit: { ...d.bySplit, [d.choice]: d.bySplit[d.choice].map((e) => (e.exerciseId === id ? fn(e) : e)) } }))
+  const setField = (exId, i, field, value) => edit((d) => changeSet(d, exId, i, (s) => ({ ...s, [field]: value })))
+
+  const toggleDone = (exId, i, done) => {
+    const t = Date.now()
+    setNow(t)
+    edit((d) => ({ ...changeSet(d, exId, i, (s) => ({ ...s, done })), restEndsAt: done ? t + REST_SECONDS * 1000 : d.restEndsAt }))
+  }
+
+  const pickWorkout = (w) => edit((d) => switchWorkout(workouts, d, w))
+  const setWalk = (patch) => edit((d) => ({ ...d, walk: { ...d.walk, ...patch } }))
+  const dismissRest = () => edit((d) => ({ ...d, restEndsAt: null }))
+  const logAnyway = () => setState((s) => ({ ...s, logging: true }))
 
   const clearDraft = () => {
     saveDraft(null)
     onDraftChange(null)
   }
 
-  const save = () => {
-    if (!choice) return
-    if (choice === 'rest') {
-      onSave(dayKey, restDay(saved, new Date()))
-      clearDraft()
-      announce(`${formatDayKey(dayKey)} saved as a rest day`)
-      onBack()
-      return
-    }
-    const result = draftToWorkout(exercises, choice, saved, new Date())
+  const finish = () => {
+    const result = sessionFromDraft(draft, saved, new Date())
     if (!result.ok) {
       setError(result.error)
-      const target =
-        result.field === null
-          ? document.getElementById(`add-set-${result.exerciseId}`)
-          : document.getElementById(`set-${result.exerciseId}-${result.setIndex}-${result.field}`)
-      target?.focus()
+      const id = result.exerciseId === 'walk' ? 'walk-min' : `set-${result.exerciseId}-${result.setIndex}-${result.field}`
+      document.getElementById(id)?.focus()
       return
     }
-    onSave(dayKey, result.workout)
+    onSave(dayKey, result.session)
     clearDraft()
-    announce(`${SPLITS[choice].name} workout saved`)
+    announce(`Workout ${draft.workout} saved`)
     onBack()
   }
 
   const remove = () => {
+    const rest = removeSession(workouts, dayKey)
     onRemove(dayKey)
     clearDraft()
     setConfirmRemove(false)
-    setState({ draft: { dayKey, choice: null, bySplit: {} }, dirty: false })
-    announce(`${formatDayKey(dayKey)} set back to not logged`)
+    setState({ draft: buildDraft(rest, dayKey), dirty: false, logging: isGymDay(dayKey) })
+    announce(`Workout for ${formatDayKey(dayKey)} removed`)
   }
 
-  const savedLabel = saved?.status === 'rest' ? 'Rest day' : saved ? `${SPLITS[saved.split]?.name ?? saved.split} workout` : null
+  const back = (
+    <HeaderButton onClick={onBack} className="-ml-1">
+      <ChevronLeftIcon size={26} strokeWidth={2.2} />
+      Today
+    </HeaderButton>
+  )
+
+  if (!logging) return <RestDay dayKey={dayKey} workouts={workouts} back={back} scrollRoot={scrollRoot} onLogAnyway={logAnyway} />
+
+  const allSets = exercises.flatMap((e) => e.sets)
+  const doneSets = allSets.filter((s) => s.done).length
   const status = error
     ? null
-    : dirty
-      ? saved
-        ? 'Unsaved changes'
-        : 'Not saved yet'
-      : saved
-        ? `${savedLabel} saved at ${formatTime(saved.updatedAt)}`
-        : 'Nothing logged for this day'
+    : saved && !dirty
+      ? `Saved at ${formatTime(saved.updatedAt)}`
+      : `${doneSets} of ${allSets.length} sets done${draft.walk.done ? ', walk done' : ''}`
 
   return (
     <div className="flex min-h-dvh flex-col">
-      <NavBar
-        title="Workout"
-        scrollRoot={scrollRoot}
-        left={
-          <HeaderButton onClick={onBack} className="-ml-1">
-            <ChevronLeftIcon size={26} strokeWidth={2.2} />
-            Today
-          </HeaderButton>
-        }
-      />
-      <LargeTitle eyebrow={formatDayKeyLong(dayKey)}>Workout</LargeTitle>
+      <NavBar title={`Workout ${draft.workout}`} scrollRoot={scrollRoot} left={back} />
+      <header className="flex items-end justify-between gap-4 px-4 pb-2 pt-1">
+        <div className="min-w-0">
+          <p className="text-[13px] font-semibold uppercase tracking-wide text-label2">{formatDayKeyLong(dayKey)}</p>
+          <h1 className="text-[34px] font-bold leading-[41px] tracking-tight">Workout {draft.workout}</h1>
+        </div>
+        <div className="mb-0.5 w-24 shrink-0">
+          <Segmented label="Today’s workout" value={draft.workout} onChange={pickWorkout} options={WORKOUT_OPTIONS} />
+        </div>
+      </header>
 
-      <div className="px-4 pt-2">
-        <Segmented label="Split" value={choice} onChange={pick} options={CHOICES} />
-      </div>
+      {restLeft > 0 && <RestTimer left={restLeft} onDismiss={dismissRest} />}
 
       <div className="flex-1">
-        {choice === null && (
-          <Message icon title="Pick today’s split">
-            Your exercises appear with the sets from your last session filled in. Pick Rest to log a rest day.
-          </Message>
-        )}
-        {choice === 'rest' && <Message title="Rest day">Saves {formatDayKey(dayKey)} as a rest day, with no exercises.</Message>}
-        {exercises?.map((ex) => (
-          <ExerciseCard key={ex.exerciseId} ex={ex} dayKey={dayKey} workouts={workouts} onChange={(fn) => updateExercise(ex.exerciseId, fn)} />
+        {exercises.map((ex) => (
+          <ExerciseCard key={ex.id} ex={ex} onField={(i, f, v) => setField(ex.id, i, f, v)} onDone={(i, done) => toggleDone(ex.id, i, done)} />
         ))}
+
+        <section className="mt-6 px-4" aria-label="Walk">
+          <h2 className="pb-1.5 pl-4 text-[17px] font-semibold leading-snug">Walk</h2>
+          <div className="flex items-center gap-2 rounded-[10px] bg-surface px-4 py-1.5">
+            <NumberField id="walk-min" value={draft.walk.min} onChange={(v) => setWalk({ min: v })} unit="min" mode="numeric" label="Walk, minutes" className="flex-1" />
+            <DoneButton done={draft.walk.done} disabled={false} label="Walk" onClick={() => setWalk({ done: !draft.walk.done })} />
+          </div>
+        </section>
 
         {saved && (
           <section className="mt-8 px-4">
             <div className="overflow-hidden rounded-[10px] bg-surface">
               {confirmRemove ? (
                 <div className="flex items-center gap-2 py-1 pl-4 pr-2">
-                  <p className="flex-1 text-[15px]">Remove the {savedLabel.toLowerCase()} for {formatDayKey(dayKey)}?</p>
+                  <p className="flex-1 text-[15px]">Remove the workout for {formatDayKey(dayKey)}?</p>
                   <HeaderButton onClick={() => setConfirmRemove(false)}>Cancel</HeaderButton>
                   <HeaderButton onClick={remove} className="font-semibold text-danger dark:text-[#ff6961]">
                     Remove
@@ -155,17 +167,16 @@ export function WorkoutScreen({ dayKey, workouts, onSave, onRemove, onBack, onDr
                 </div>
               ) : (
                 <RowButton onClick={() => setConfirmRemove(true)} className="justify-center text-danger dark:text-[#ff6961]">
-                  Remove {savedLabel}
+                  Remove Workout
                 </RowButton>
               )}
             </div>
-            <p className="px-4 pt-1.5 text-[13px] text-label2">Sets this day back to not logged.</p>
           </section>
         )}
         <div className="h-6" />
       </div>
 
-      {/* Save stays under the thumb, whatever is scrolled into view. */}
+      {/* Finish stays under the thumb, whatever is scrolled into view. */}
       <div className="sticky bottom-0 z-10 border-t border-sep/60 bg-bar px-4 pt-2.5 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur-xl">
         <p role="status" className={`mb-2 flex min-h-[18px] items-start gap-1.5 text-[13px] ${error ? 'text-danger dark:text-[#ff6961]' : 'text-label2'}`}>
           {error && <WarningIcon size={16} className="mt-px" />}
@@ -173,108 +184,174 @@ export function WorkoutScreen({ dayKey, workouts, onSave, onRemove, onBack, onDr
         </p>
         <button
           type="button"
-          onClick={save}
-          disabled={!choice}
+          onClick={finish}
+          disabled={!draftHasDone(draft)}
           className="h-[50px] w-full rounded-xl bg-tint-fill text-[17px] font-semibold text-white transition active:scale-[0.98] active:opacity-90 disabled:bg-fill disabled:text-label3"
         >
-          {choice === 'rest' ? 'Save Rest Day' : saved && !dirty ? 'Save Again' : saved ? 'Save Changes' : 'Save Workout'}
+          {saved ? 'Save Changes' : 'Finish'}
         </button>
       </div>
     </div>
   )
 }
 
-function Message({ title, children, icon = false }) {
+function RestTimer({ left, onDismiss }) {
+  const text = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`
   return (
-    <div className="mx-4 mt-6 flex flex-col items-center rounded-[10px] bg-surface px-6 py-6 text-center">
-      {icon && <DumbbellIcon size={34} strokeWidth={1.6} className="text-label3" />}
-      <p className={`${icon ? 'mt-2' : ''} text-[17px] font-semibold`}>{title}</p>
-      <p className="mt-1 text-[15px] text-label2">{children}</p>
+    <div className="sticky top-[calc(2.75rem+env(safe-area-inset-top))] z-10 px-4 pt-1">
+      <button
+        type="button"
+        onClick={onDismiss}
+        aria-label={`Rest, ${left} seconds left. Tap to dismiss.`}
+        className="relative flex w-full items-center justify-between overflow-hidden rounded-xl bg-tint-fill px-4 py-2.5 text-white shadow-[0_2px_8px_rgb(0_0_0/0.15)] active:opacity-90"
+      >
+        <span className="text-[15px] font-semibold">Rest</span>
+        <span role="timer" className="text-[28px] font-semibold leading-none tabular-nums">
+          {text}
+        </span>
+        <span
+          aria-hidden="true"
+          className="absolute bottom-0 left-0 h-1 w-full origin-left bg-white/40 transition-transform duration-300 ease-linear"
+          style={{ transform: `scaleX(${left / REST_SECONDS})` }}
+        />
+      </button>
     </div>
   )
 }
 
-function ExerciseCard({ ex, dayKey, workouts, onChange }) {
-  const name = exerciseName(ex.exerciseId)
-  const kind = exerciseKind(ex.exerciseId, ex.sets)
-  const last = lastSession(workouts, ex.exerciseId, dayKey)
-  const sub = ex.skipped ? 'Skipped' : last ? `Last time: ${formatDayKey(last.dayKey)}` : 'First time: enter your sets'
-
-  const setField = (i, field, value) => onChange((e) => ({ ...e, sets: e.sets.map((s, j) => (j === i ? { ...s, [field]: value } : s)) }))
-  // A new set starts as a copy of the one before it.
-  const addSet = () => onChange((e) => ({ ...e, sets: [...e.sets, e.sets.length ? { ...e.sets.at(-1) } : blankSet(kind)] }))
-  const removeSet = (i) => onChange((e) => ({ ...e, sets: e.sets.filter((_, j) => j !== i) }))
-
+function RestDay({ dayKey, workouts, back, scrollRoot, onLogAnyway }) {
+  const next = nextWorkout(workouts, dayKey)
   return (
-    <section className="mt-7 px-4" aria-label={name}>
-      <div className="flex items-end justify-between gap-2 pb-1.5 pl-4">
-        <div className="min-w-0">
-          <h2 className="text-[17px] font-semibold leading-snug">{name}</h2>
-          <p className="text-[13px] text-label2">{sub}</p>
-        </div>
-        <HeaderButton onClick={() => onChange((e) => ({ ...e, skipped: !e.skipped }))} className="-mb-2 -mr-2 shrink-0 text-[15px]" aria-label={ex.skipped ? `Undo skip ${name}` : `Skip ${name}`}>
-          {ex.skipped ? 'Undo Skip' : 'Skip'}
-        </HeaderButton>
+    <div className="flex min-h-dvh flex-col">
+      <NavBar title="Rest Day" scrollRoot={scrollRoot} left={back} />
+      <header className="px-4 pb-2 pt-1">
+        <p className="text-[13px] font-semibold uppercase tracking-wide text-label2">{formatDayKeyLong(dayKey)}</p>
+        <h1 className="text-[34px] font-bold leading-[41px] tracking-tight">Rest day</h1>
+      </header>
+      <div className="mx-4 mt-2 flex items-center gap-3 rounded-[10px] bg-surface px-4 py-3 text-[15px] text-label2">
+        <MoonIcon size={22} className="text-label3" />
+        <span>No workout scheduled. Gym days are {gymDayNames()}.</span>
       </div>
-      {!ex.skipped && (
-        <div className="overflow-hidden rounded-[10px] bg-surface">
-          <div aria-hidden="true" className="flex gap-2 px-4 pb-0.5 pt-2 text-[12px] uppercase tracking-wide text-label2">
-            <span className="w-6">Set</span>
-            <span className="flex-1">{kind === 'band' ? 'Band' : 'Weight'}</span>
-            <span className="w-[5.75rem]">Reps</span>
-            <span className="w-11" />
-          </div>
-          {ex.sets.map((s, i) => {
-            const base = `set-${ex.exerciseId}-${i}`
-            const label = `${name}, set ${i + 1}`
+
+      <section className="mt-7 px-4" aria-label={`Next workout, ${next}`}>
+        <h2 className="px-4 pb-1.5 text-[13px] uppercase tracking-wide text-label2">Next: Workout {next}</h2>
+        <ul className="overflow-hidden rounded-[10px] bg-surface">
+          {WORKOUTS[next].map((def) => {
+            const pf = prefill(workouts, def, dayKey)
             return (
-              <div key={i} className="grouped-row relative flex items-center gap-2 px-4 py-1.5">
-                <span className="w-6 text-[17px] tabular-nums text-label2">{i + 1}</span>
-                {kind === 'band' ? (
-                  <div className="relative min-w-0 flex-1">
-                    <select
-                      id={`${base}-band`}
-                      value={s.band ?? ''}
-                      onChange={(e) => setField(i, 'band', e.target.value || null)}
-                      aria-label={`${label}, band`}
-                      className={`h-11 w-full appearance-none rounded-lg bg-fill pl-3 pr-8 text-[17px] focus:outline-none focus:ring-2 focus:ring-tint ${s.band ? 'text-label' : 'text-label3'}`}
-                    >
-                      <option value="">Choose…</option>
-                      {BAND_LEVELS.map((b) => (
-                        <option key={b} value={b}>
-                          {BAND_NAMES[b]}
-                        </option>
-                      ))}
-                    </select>
-                    <ChevronRightIcon size={16} className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 rotate-90 text-label3" />
-                  </div>
-                ) : (
-                  <NumberField id={`${base}-weight`} value={s.weight} onChange={(v) => setField(i, 'weight', v)} unit="lb" mode="decimal" label={`${label}, weight in pounds`} className="flex-1" />
-                )}
-                <NumberField id={`${base}-reps`} value={s.reps} onChange={(v) => setField(i, 'reps', v)} unit="reps" mode="numeric" label={`${label}, reps`} className="w-[5.75rem]" />
-                <button
-                  type="button"
-                  onClick={() => removeSet(i)}
-                  disabled={ex.sets.length === 1}
-                  aria-label={`Remove ${label}`}
-                  className="-mr-2 flex h-11 w-11 shrink-0 items-center justify-center text-danger disabled:text-label3 dark:text-[#ff6961] dark:disabled:text-label3"
-                >
-                  <MinusCircleIcon size={22} />
-                </button>
-              </div>
+              <li key={def.id} className="grouped-row relative flex min-h-11 items-center gap-2 px-4 py-2.5 text-[17px]">
+                <span className="flex-1">{def.name}</span>
+                {pf.up && <UpBadge />}
+                <span className="text-[15px] tabular-nums text-label2">{describePrefill(pf.sets)}</span>
+              </li>
             )
           })}
-          <RowButton id={`add-set-${ex.exerciseId}`} onClick={addSet} className="text-tint">
-            <PlusIcon size={20} />
-            Add Set
-          </RowButton>
+        </ul>
+      </section>
+
+      <div className="mt-6 px-4">
+        <button
+          type="button"
+          onClick={onLogAnyway}
+          className="h-[50px] w-full rounded-xl bg-surface text-[17px] font-semibold text-tint transition active:scale-[0.98] active:bg-fill"
+        >
+          Log Anyway
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function gymDayNames() {
+  // 2026-11-01 was a Sunday, so day n of that week has weekday n.
+  const names = GYM_WEEKDAYS.map((d) => new Date(2026, 10, 1 + d).toLocaleDateString(undefined, { weekday: 'long' }))
+  return names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0]
+}
+
+function describePrefill(sets) {
+  const s = sets[0]
+  if ('seconds' in s) return `${sets.length} × ${s.seconds} s`
+  return `${sets.length} × ${s.reps}, ${s.weightLb === null ? 'find weight' : s.weightLb === 0 ? 'bodyweight' : `${formatNumber(s.weightLb)} lb`}`
+}
+
+function UpBadge() {
+  return <span className="rounded-full bg-protein/15 px-2 py-px text-[12px] font-bold uppercase tracking-wide text-protein">Up</span>
+}
+
+function exerciseNote(id) {
+  const def = exerciseDef(id)
+  if (!def) return null
+  return def.note ?? { dumbbell: 'Per dumbbell', machine: 'Machine', hold: null }[def.kind]
+}
+
+function ExerciseCard({ ex, onField, onDone }) {
+  const name = exerciseName(ex.id)
+  const note = exerciseNote(ex.id)
+  const hold = 'seconds' in ex.sets[0]
+
+  return (
+    <section className="mt-6 px-4" aria-label={name}>
+      <div className="flex items-center gap-2 pb-1.5 pl-4">
+        <h2 className="text-[17px] font-semibold leading-snug">{name}</h2>
+        {ex.up && <UpBadge />}
+      </div>
+      {note && <p className="-mt-1 pb-1.5 pl-4 text-[13px] text-label2">{note}</p>}
+      <div className="overflow-hidden rounded-[10px] bg-surface">
+        <div aria-hidden="true" className="flex gap-2 px-4 pb-0.5 pt-2 text-[12px] uppercase tracking-wide text-label2">
+          <span className="w-7">Set</span>
+          <span className="flex-1">{hold ? 'Seconds' : 'lb'}</span>
+          {!hold && <span className="w-16">Reps</span>}
+          <span className="w-14" />
         </div>
-      )}
+        {ex.sets.map((s, i) => {
+          const base = `set-${ex.id}-${i}`
+          const label = `${name}, set ${i + 1}`
+          return (
+            <div key={i} className="grouped-row relative flex items-center gap-2 px-4 py-1.5">
+              <span className={`w-7 text-[17px] tabular-nums ${s.done ? 'text-tint' : 'text-label2'}`}>{i + 1}</span>
+              {hold ? (
+                <NumberField id={`${base}-seconds`} value={s.seconds} onChange={(v) => onField(i, 'seconds', v)} mode="numeric" label={`${label}, seconds`} className="flex-1" />
+              ) : (
+                <>
+                  <NumberField
+                    id={`${base}-weight`}
+                    value={s.weight}
+                    onChange={(v) => onField(i, 'weight', v)}
+                    mode="decimal"
+                    placeholder="find your weight"
+                    label={`${label}, weight in pounds`}
+                    className="flex-1"
+                  />
+                  <NumberField id={`${base}-reps`} value={s.reps} onChange={(v) => onField(i, 'reps', v)} mode="numeric" label={`${label}, reps`} className="w-16" />
+                </>
+              )}
+              <DoneButton done={s.done} disabled={!s.done && Boolean(parseSet(s).error)} label={label} onClick={() => onDone(i, !s.done)} />
+            </div>
+          )
+        })}
+      </div>
     </section>
   )
 }
 
-function NumberField({ id, value, onChange, unit, mode, label, className = '' }) {
+function DoneButton({ done, disabled, label, onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-pressed={done}
+      aria-label={`${label}, done`}
+      className={`flex h-11 w-14 shrink-0 items-center justify-center rounded-lg text-[15px] font-semibold transition active:scale-95 disabled:bg-fill disabled:text-label3 ${
+        done ? 'bg-tint-fill text-white' : 'bg-fill text-tint'
+      }`}
+    >
+      {done ? <CheckIcon size={22} strokeWidth={2.6} /> : 'Done'}
+    </button>
+  )
+}
+
+function NumberField({ id, value, onChange, unit, mode, label, placeholder, className = '' }) {
   return (
     <label htmlFor={id} className={`flex h-11 min-w-0 items-center gap-1 rounded-lg bg-fill px-2.5 focus-within:ring-2 focus-within:ring-tint ${className}`}>
       <input
@@ -288,14 +365,17 @@ function NumberField({ id, value, onChange, unit, mode, label, className = '' })
         }}
         inputMode={mode}
         pattern={mode === 'numeric' ? '[0-9]*' : undefined}
+        placeholder={placeholder}
         enterKeyHint="done"
         autoComplete="off"
         aria-label={label}
-        className="h-full w-full min-w-0 bg-transparent text-right text-[17px] tabular-nums focus:outline-none"
+        className="h-full w-full min-w-0 bg-transparent text-right text-[17px] tabular-nums placeholder:text-[15px] placeholder:text-label3 focus:outline-none"
       />
-      <span aria-hidden="true" className="text-[15px] text-label2">
-        {unit}
-      </span>
+      {unit && (
+        <span aria-hidden="true" className="text-[15px] text-label2">
+          {unit}
+        </span>
+      )}
     </label>
   )
 }
