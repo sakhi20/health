@@ -1,7 +1,7 @@
 import { test, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
 import { dayKeyFor, shiftDayKey } from '../src/day.js'
-import { WORKOUTS, INCREMENT_LB } from '../src/program.js'
+import { WORKOUTS, INCREMENT_LB, SETS, REPS } from '../src/program.js'
 import {
   emptyWorkouts,
   loadWorkouts,
@@ -11,7 +11,6 @@ import {
   isGymDay,
   nextWorkout,
   workoutForDay,
-  setCount,
   daySummary,
   lastTime,
   prefill,
@@ -126,27 +125,32 @@ test('a session started at 3:59am Tuesday belongs to Monday, a rest day', () => 
   assert.equal(isGymDay(key), false)
 })
 
-// ---- 2 to 3 sets ----
+// ---- Sets and reps ----
 
-test('2 sets for the first 7 days from the first session, 3 after', () => {
-  assert.equal(setCount(emptyWorkouts(), TUE), 2) // the first session itself
-  const s = store([[TUE, session('A', [])]])
-  assert.equal(setCount(s, TUE), 2)
-  assert.equal(setCount(s, shiftDayKey(TUE, 6)), 2) // Monday 9 Nov
-  assert.equal(setCount(s, shiftDayKey(TUE, 7)), 3) // Tuesday 10 Nov
-  assert.equal(setCount(s, '2026-12-01'), 3)
+// Three identical sets.
+const x3 = (set) => [set, set, set]
+
+test('every exercise gets 3 sets of 9, from the very first session', () => {
+  assert.equal(SETS, 3)
+  assert.equal(REPS.prefill, 9)
+  const d = buildDraft(emptyWorkouts(), TUE)
+  for (const ex of d.byWorkout.A) assert.equal(ex.sets.length, 3, ex.id)
 })
 
-test('the first session day counts from the 4am day, not the calendar date', () => {
-  const s = store([[dayKeyFor(new Date(2026, 10, 4, 1, 0)), session('A', [])]]) // 1am Wed = Tuesday
-  assert.equal(setCount(s, '2026-11-10'), 3)
+test('reps always start at 9, whatever was done last time; weights copy set by set', () => {
+  const s = store([[TUE, session('A', [lifts('dumbbell-bench-press', [12.5, 11], [15, 8], [15, 6])])]])
+  assert.deepEqual(prefill(s, def('dumbbell-bench-press'), SAT), {
+    up: false,
+    lastDayKey: TUE,
+    sets: [{ weightLb: 12.5, reps: 9 }, { weightLb: 15, reps: 9 }, { weightLb: 15, reps: 9 }],
+  })
 })
 
-test('prefill has as many sets as the day calls for; a third set copies the second', () => {
-  const s = store([[TUE, session('A', [lifts('dumbbell-bench-press', [15, 10], [15, 9])])]])
-  assert.equal(prefill(s, def('dumbbell-bench-press'), THU).sets.length, 2)
-  assert.deepEqual(prefill(s, def('dumbbell-bench-press'), '2026-11-10').sets, [
-    { weightLb: 15, reps: 10 },
+test("a session with fewer sets: the missing ones copy the last one's weight", () => {
+  // Like the first session, logged when the program still called for 2 sets.
+  const s = store([[TUE, session('A', [lifts('dumbbell-bench-press', [12.5, 10], [15, 10])])]])
+  assert.deepEqual(prefill(s, def('dumbbell-bench-press'), SAT).sets, [
+    { weightLb: 12.5, reps: 9 },
     { weightLb: 15, reps: 9 },
     { weightLb: 15, reps: 9 },
   ])
@@ -154,82 +158,66 @@ test('prefill has as many sets as the day calls for; a third set copies the seco
 
 // ---- Prefill and progression ----
 
-test('no history: start weight and 10 reps; machines start empty', () => {
+test('no history: start weight and 9 reps; machines start empty', () => {
   const s = emptyWorkouts()
-  assert.deepEqual(prefill(s, def('dumbbell-bench-press'), TUE), { up: false, lastDayKey: null, sets: [{ weightLb: 12.5, reps: 10 }, { weightLb: 12.5, reps: 10 }] })
-  assert.deepEqual(prefill(s, def('leg-press'), TUE).sets[0], { weightLb: null, reps: 10 })
-  assert.deepEqual(prefill(s, def('plank'), TUE).sets[0], { seconds: 20 })
-  assert.deepEqual(prefill(s, def('hip-thrust'), TUE).sets[0], { weightLb: 0, reps: 10 })
+  assert.deepEqual(prefill(s, def('dumbbell-bench-press'), TUE), { up: false, lastDayKey: null, sets: x3({ weightLb: 12.5, reps: 9 }) })
+  assert.deepEqual(prefill(s, def('leg-press'), TUE).sets[0], { weightLb: null, reps: 9 })
+  assert.deepEqual(prefill(s, def('plank'), TUE).sets, x3({ seconds: 20 }))
+  assert.deepEqual(prefill(s, def('hip-thrust'), TUE).sets[0], { weightLb: 0, reps: 9 })
   const d = buildDraft(s, TUE)
-  assert.deepEqual(d.byWorkout.A[0].sets[0], { weight: '', reps: '10', done: false })
+  assert.deepEqual(d.byWorkout.A[0].sets[0], { weight: '', reps: '9', done: false })
 })
 
-test('prefill copies last session set by set', () => {
-  const s = store([[TUE, session('A', [lifts('dumbbell-bench-press', [12.5, 11], [12.5, 8])])]])
-  assert.deepEqual(prefill(s, def('dumbbell-bench-press'), SAT), {
-    up: false,
-    lastDayKey: TUE,
-    sets: [{ weightLb: 12.5, reps: 11 }, { weightLb: 12.5, reps: 8 }],
-  })
-})
-
-test('12 reps on every set: dumbbell goes up 2.5 lb, machine 5 lb, reps back to 8', () => {
-  const s = store([[TUE, session('A', [lifts('dumbbell-bench-press', [12.5, 12], [12.5, 12]), lifts('leg-press', [90, 12], [90, 13])])]])
+test('12 reps on every set: dumbbell goes up 2.5 lb, machine 5 lb, reps still 9', () => {
+  const s = store([[TUE, session('A', [
+    lifts('dumbbell-bench-press', [12.5, 12], [12.5, 12], [12.5, 12]),
+    lifts('leg-press', [90, 12], [90, 13], [90, 12]),
+  ])]])
   assert.deepEqual(prefill(s, def('dumbbell-bench-press'), SAT), {
     up: true,
     lastDayKey: TUE,
-    sets: [{ weightLb: 12.5 + INCREMENT_LB.dumbbell, reps: 8 }, { weightLb: 15, reps: 8 }],
+    sets: x3({ weightLb: 12.5 + INCREMENT_LB.dumbbell, reps: 9 }),
   })
-  assert.deepEqual(prefill(s, def('leg-press'), SAT).sets, [{ weightLb: 95, reps: 8 }, { weightLb: 95, reps: 8 }])
+  assert.deepEqual(prefill(s, def('leg-press'), SAT).sets, x3({ weightLb: 95, reps: 9 }))
   assert.equal(INCREMENT_LB.machine, 5)
 })
 
 test('no Up when any set is short of 12, when a set is missing, or under 8 reps', () => {
   const s = store([
     [TUE, session('A', [
-      lifts('dumbbell-bench-press', [12.5, 12], [12.5, 11]),
-      lifts('dumbbell-romanian-deadlift', [15, 12]), // only 1 of 2 sets done
-      lifts('lat-pulldown', [50, 6], [50, 7]), // under 8: same weight, no decrease
+      lifts('dumbbell-bench-press', [12.5, 12], [12.5, 12], [12.5, 11]),
+      lifts('dumbbell-romanian-deadlift', [15, 12], [15, 12]), // only 2 of 3 sets done
+      lifts('lat-pulldown', [50, 6], [50, 7], [50, 7]), // under 8: same weight, no decrease
     ])],
   ])
   const bench = prefill(s, def('dumbbell-bench-press'), SAT)
   assert.equal(bench.up, false)
-  assert.deepEqual(bench.sets, [{ weightLb: 12.5, reps: 12 }, { weightLb: 12.5, reps: 11 }])
+  assert.deepEqual(bench.sets, x3({ weightLb: 12.5, reps: 9 }))
   assert.equal(prefill(s, def('dumbbell-romanian-deadlift'), SAT).up, false)
   const lat = prefill(s, def('lat-pulldown'), SAT)
   assert.equal(lat.up, false)
-  assert.deepEqual(lat.sets, [{ weightLb: 50, reps: 6 }, { weightLb: 50, reps: 7 }])
-})
-
-test('Up needs all 3 sets once the program calls for 3', () => {
-  const s = store([
-    [TUE, session('A', [])],
-    ['2026-11-10', session('A', [lifts('dumbbell-bench-press', [15, 12], [15, 12])])], // 3 sets due, 2 done
-  ])
-  assert.equal(prefill(s, def('dumbbell-bench-press'), '2026-11-12').up, false)
-  const s2 = putSession(s, '2026-11-10', session('A', [lifts('dumbbell-bench-press', [15, 12], [15, 12], [15, 12])]))
-  assert.equal(prefill(s2, def('dumbbell-bench-press'), '2026-11-12').up, true)
+  assert.deepEqual(lat.sets, x3({ weightLb: 50, reps: 9 }))
 })
 
 test('hip thrust goes from 0 straight to 15, then up 2.5 lb at a time', () => {
   const ht = def('hip-thrust')
-  let s = store([[TUE, session('B', [lifts('hip-thrust', [0, 12], [0, 12])])]])
-  assert.deepEqual(prefill(s, ht, THU), { up: true, lastDayKey: TUE, sets: [{ weightLb: 15, reps: 8 }, { weightLb: 15, reps: 8 }] })
-  s = putSession(s, THU, session('B', [lifts('hip-thrust', [15, 12], [15, 12])]))
-  assert.deepEqual(prefill(s, ht, SAT).sets[0], { weightLb: 17.5, reps: 8 })
-  // Bodyweight that hasn't reached 12 yet stays at 0.
-  const s2 = store([[TUE, session('B', [lifts('hip-thrust', [0, 12], [0, 10])])]])
-  assert.deepEqual(prefill(s2, ht, THU).sets[0], { weightLb: 0, reps: 12 })
+  let s = store([[TUE, session('B', [lifts('hip-thrust', [0, 12], [0, 12], [0, 12])])]])
+  assert.deepEqual(prefill(s, ht, THU), { up: true, lastDayKey: TUE, sets: x3({ weightLb: 15, reps: 9 }) })
+  s = putSession(s, THU, session('B', [lifts('hip-thrust', [15, 12], [15, 12], [15, 12])]))
+  assert.deepEqual(prefill(s, ht, SAT).sets[0], { weightLb: 17.5, reps: 9 })
+  // Bodyweight that hasn't reached 12 on every set stays at 0.
+  const s2 = store([[TUE, session('B', [lifts('hip-thrust', [0, 12], [0, 12], [0, 10])])]])
+  assert.deepEqual(prefill(s2, ht, THU).sets[0], { weightLb: 0, reps: 9 })
 })
 
 test('plank adds 5 seconds only when every hold matched its prefill', () => {
   const plank = def('plank')
-  const matched = store([[TUE, session('A', [holds('plank', [20, 20], [25, 20])])]])
-  assert.deepEqual(prefill(matched, plank, SAT), { up: true, lastDayKey: TUE, sets: [{ seconds: 25 }, { seconds: 25 }] })
-  const short = store([[TUE, session('A', [holds('plank', [20, 20], [15, 20])])]])
+  const matched = store([[TUE, session('A', [holds('plank', [20, 20], [25, 20], [20, 20])])]])
+  assert.deepEqual(prefill(matched, plank, SAT), { up: true, lastDayKey: TUE, sets: x3({ seconds: 25 }) })
+  const short = store([[TUE, session('A', [holds('plank', [20, 20], [15, 20], [20, 20])])]])
   const p = prefill(short, plank, SAT)
   assert.equal(p.up, false)
-  assert.deepEqual(p.sets, [{ seconds: 20 }, { seconds: 20 }]) // same target again
+  assert.deepEqual(p.sets, x3({ seconds: 20 })) // same target again
   // The target carries into the draft and back into the saved session.
   const d = buildDraft(matched, SAT, 'A') // Saturday is B in rotation; switched to A
   assert.deepEqual(d.byWorkout.A[4].sets[0], { seconds: '25', target: 25, done: false })
@@ -239,21 +227,26 @@ test('plank adds 5 seconds only when every hold matched its prefill', () => {
 
 test('prefill and Up look back past sessions where the exercise was skipped', () => {
   const s = store([
-    [TUE, session('A', [lifts('dumbbell-bench-press', [12.5, 12], [12.5, 12]), lifts('leg-press', [80, 10], [80, 10])])],
-    [THU, session('B', [lifts('goblet-squat', [15, 10], [15, 10])])],
+    [TUE, session('A', [lifts('dumbbell-bench-press', [12.5, 12], [12.5, 12], [12.5, 12]), lifts('leg-press', [80, 10], [80, 10], [80, 10])])],
+    [THU, session('B', [lifts('goblet-squat', [15, 10], [15, 10], [15, 10])])],
     // Bench skipped this time; leg press done.
-    [SAT, session('A', [lifts('leg-press', [85, 9], [85, 9])])],
+    [SAT, session('A', [lifts('leg-press', [85, 9], [85, 9], [85, 9])])],
     ['2026-11-10', session('B', [])],
   ])
   assert.deepEqual(lastTime(s, 'dumbbell-bench-press', '2026-11-12'), { dayKey: TUE, sets: s.sessions[TUE].exercises[0].sets })
   const bench = prefill(s, def('dumbbell-bench-press'), '2026-11-12')
   assert.equal(bench.lastDayKey, TUE)
   assert.equal(bench.up, true) // 12s on Tuesday still count
-  assert.deepEqual(bench.sets[0], { weightLb: 15, reps: 8 })
-  assert.equal(bench.sets.length, 3)
+  assert.deepEqual(bench.sets, x3({ weightLb: 15, reps: 9 }))
   const press = prefill(s, def('leg-press'), '2026-11-12')
   assert.equal(press.lastDayKey, SAT)
   assert.equal(press.up, false)
+  assert.deepEqual(press.sets[0], { weightLb: 85, reps: 9 })
+})
+
+test('a 2-set session does not count toward Up now that 3 are called for', () => {
+  const s = store([[TUE, session('A', [lifts('dumbbell-bench-press', [12.5, 12], [12.5, 12])])]])
+  assert.equal(prefill(s, def('dumbbell-bench-press'), SAT).up, false)
 })
 
 // ---- Saving ----
@@ -273,7 +266,7 @@ test('only sets marked Done are saved; exercises with none are left out', () => 
     workout: 'A',
     exercises: [
       { id: 'leg-press', sets: [{ weightLb: 90, reps: 11 }] },
-      { id: 'dumbbell-bench-press', sets: [{ weightLb: 12.5, reps: 10 }] },
+      { id: 'dumbbell-bench-press', sets: [{ weightLb: 12.5, reps: 9 }] },
       { id: 'plank', sets: [{ seconds: 20, targetSec: 20 }] },
     ],
     walkMin: 10,
@@ -308,7 +301,8 @@ test('reopening a saved day shows saved sets as done, then any remaining planned
   assert.equal(d.workout, 'A')
   assert.deepEqual(d.byWorkout.A[1].sets, [
     { weight: '12.5', reps: '10', done: true },
-    { weight: '12.5', reps: '10', done: false },
+    { weight: '12.5', reps: '9', done: false },
+    { weight: '12.5', reps: '9', done: false },
   ])
   assert.equal(d.byWorkout.A[0].sets.every((x) => !x.done), true)
   assert.deepEqual(d.walk, { min: '10', done: false })

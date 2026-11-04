@@ -8,13 +8,11 @@
 //             { seconds, targetSec } for holds (targetSec is what was prefilled)
 // Only sets marked Done are stored; an exercise with none is left out.
 // Rest days are not stored: the schedule in program.js decides them.
-import { shiftDayKey, weekdayOf } from './day.js'
+import { weekdayOf } from './day.js'
 import { parseAmount } from './format.js'
 import {
   GYM_WEEKDAYS,
   REPS,
-  FIRST_SETS,
-  FIRST_DAYS,
   SETS,
   WALK_MINUTES,
   INCREMENT_LB,
@@ -103,12 +101,6 @@ export function nextWorkout(store, dayKey) {
 // What this day shows: the saved session's workout, otherwise the next in rotation.
 export const workoutForDay = (store, dayKey) => store.sessions[dayKey]?.workout ?? nextWorkout(store, dayKey)
 
-// Sets per exercise on this day: fewer for the first days after the very first session.
-export function setCount(store, dayKey) {
-  const first = [dayKey, ...Object.keys(store.sessions)].sort()[0]
-  return dayKey < shiftDayKey(first, FIRST_DAYS) ? FIRST_SETS : SETS
-}
-
 // For the Today screen.
 export function daySummary(store, dayKey) {
   const saved = store.sessions[dayKey]
@@ -128,10 +120,10 @@ export function lastTime(store, exerciseId, beforeDayKey) {
   return null
 }
 
-// Every set the program called for that day was done, at the top of the rep range
+// Every set the program calls for was done, at the top of the rep range
 // (or, for a hold, at least as long as its target).
-function earnedUp(store, def, last) {
-  if (last.sets.length < setCount(store, last.dayKey)) return false
+function earnedUp(def, last) {
+  if (last.sets.length < SETS) return false
   if (def.kind === 'hold') return last.sets.every((s) => s.seconds >= s.targetSec)
   return last.sets.every((s) => s.reps >= REPS.max)
 }
@@ -145,25 +137,25 @@ function upWeight(def, sets) {
 const fill = (n, set) => Array.from({ length: n }, () => ({ ...set }))
 
 // What each set starts as on this day. Numbers, with weightLb null for a machine
-// that has never been logged. { up, sets, lastDayKey }
+// that has never been logged. Reps always start at REPS.prefill. { up, sets, lastDayKey }
 export function prefill(store, def, dayKey) {
-  const n = setCount(store, dayKey)
+  const n = SETS
   const last = lastTime(store, def.id, dayKey)
   const hold = def.kind === 'hold'
   if (!last) {
-    return { up: false, lastDayKey: null, sets: fill(n, hold ? { seconds: def.startSec } : { weightLb: def.startLb, reps: REPS.start }) }
+    return { up: false, lastDayKey: null, sets: fill(n, hold ? { seconds: def.startSec } : { weightLb: def.startLb, reps: REPS.prefill }) }
   }
-  if (earnedUp(store, def, last)) {
+  if (earnedUp(def, last)) {
     const sets = hold
       ? fill(n, { seconds: Math.max(...last.sets.map((s) => s.targetSec)) + HOLD_INCREMENT_SEC })
-      : fill(n, { weightLb: upWeight(def, last.sets), reps: REPS.afterUp })
+      : fill(n, { weightLb: upWeight(def, last.sets), reps: REPS.prefill })
     return { up: true, lastDayKey: last.dayKey, sets }
   }
-  // Same as last time, set by set. Extra sets copy the last one. A hold that fell short
-  // keeps the same target, like a weight that keeps the same pounds.
+  // Same weight as last time, set by set. Extra sets copy the last one. A hold that
+  // fell short keeps the same target, like a weight that keeps the same pounds.
   const sets = Array.from({ length: n }, (_, i) => {
     const s = last.sets[Math.min(i, last.sets.length - 1)]
-    return hold ? { seconds: s.targetSec } : { weightLb: s.weightLb, reps: s.reps }
+    return hold ? { seconds: s.targetSec } : { weightLb: s.weightLb, reps: REPS.prefill }
   })
   return { up: false, lastDayKey: last.dayKey, sets }
 }

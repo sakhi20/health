@@ -17,14 +17,10 @@ export const GYM_WEEKDAYS = [2, 4, 6]
 export const REPS = {
   min: 8, // below this on any set: keep the same weight next time
   max: 12, // this on every set: go up next time
-  start: 10, // first session, no history
-  afterUp: 8, // after going up in weight
+  prefill: 9, // every set starts at this many reps; tap to change it
 }
 
-// FIRST_SETS per exercise for the first FIRST_DAYS days (counted from the first
-// session's day), then SETS.
-export const FIRST_SETS = 2
-export const FIRST_DAYS = 7
+// Sets per exercise.
 export const SETS = 3
 
 export const REST_SECONDS = 90
@@ -49,5 +45,6 @@ export const WORKOUTS = {
     { id: 'dumbbell-shoulder-press', name: 'Dumbbell shoulder press', kind: 'dumbbell', startLb: 7.5 },
     { id: 'hip-thrust', name: 'Hip thrust', kind: 'dumbbell', startLb: 0, firstStepLb: 15, note: 'One dumbbell, 0 = bodyweight' },
     { id: 'leg-curl', name: 'Leg curl', kind: 'machine', startLb: null },
+    { id: 'pallof-press', name: 'Pallof press', kind: 'machine', startLb: null, note: 'Cable' },
   ],
 }
