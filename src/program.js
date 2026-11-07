@@ -15,10 +15,19 @@
 export const GYM_WEEKDAYS = [2, 4, 6]
 
 export const REPS = {
-  min: 8, // below this on any set: keep the same weight next time
-  max: 12, // this on every set: go up next time
-  prefill: 9, // every set starts at this many reps; tap to change it
+  prefill: 9, // where reps start, and where they go back to after a weight increase
+  up: 9, // weight steps: this many or more on every set adds weight next time
+  cap: 12, // rep steps: reps climb one a session up to this, then the weight goes up
 }
+
+// Each session, every lift picks how it progresses from last session's top weight:
+// - weight steps: the increment is at most this percent of that weight. 9+ reps on
+//   every set adds the increment next session, reps back to REPS.prefill.
+// - rep steps: the increment is more than this percent. Reaching the prefilled reps on
+//   every set adds one rep per set next session, up to REPS.cap; REPS.cap on every set
+//   adds the increment to each set's weight, reps back to REPS.prefill.
+// Either way, falling short of the prefilled reps on any set repeats the same numbers.
+export const WEIGHT_STEP_MAX_PERCENT = 10
 
 // Sets per exercise.
 export const SETS = 3
@@ -41,6 +50,7 @@ export const WORKOUTS = {
   ],
   B: [
     { id: 'goblet-squat', name: 'Goblet squat', kind: 'dumbbell', startLb: 15, note: 'One dumbbell' },
+    { id: 'chest-press', name: 'Chest press', kind: 'machine', startLb: null },
     { id: 'seated-cable-row', name: 'Seated cable row', kind: 'machine', startLb: null },
     { id: 'dumbbell-shoulder-press', name: 'Dumbbell shoulder press', kind: 'dumbbell', startLb: 7.5 },
     { id: 'hip-thrust', name: 'Hip thrust', kind: 'dumbbell', startLb: 0, firstStepLb: 15, note: 'One dumbbell, 0 = bodyweight' },

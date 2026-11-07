@@ -4,8 +4,10 @@
 // Stored shape:
 // { version: 2, sessions: { "2026-11-03": Session } }
 //   Session:  { workout: 'A' | 'B', exercises: [{ id, sets }], walkMin: number | null, loggedAt, updatedAt }
-//   Set:      { weightLb, reps } for dumbbells and machines
-//             { seconds, targetSec } for holds (targetSec is what was prefilled)
+//   Set:      { weightLb, reps, targetReps } for dumbbells and machines
+//             { seconds, targetSec } for holds
+//   targetReps / targetSec are what was prefilled. Sets logged before targetReps
+//   existed don't have it; they were prefilled with REPS.prefill.
 // Only sets marked Done are stored; an exercise with none is left out.
 // Rest days are not stored: the schedule in program.js decides them.
 import { weekdayOf } from './day.js'
@@ -16,6 +18,7 @@ import {
   SETS,
   WALK_MINUTES,
   INCREMENT_LB,
+  WEIGHT_STEP_MAX_PERCENT,
   HOLD_INCREMENT_SEC,
   WORKOUTS,
 } from './program.js'
@@ -120,54 +123,72 @@ export function lastTime(store, exerciseId, beforeDayKey) {
   return null
 }
 
-// Every set the program calls for was done, at the top of the rep range
-// (or, for a hold, at least as long as its target).
-function earnedUp(def, last) {
-  if (last.sets.length < SETS) return false
-  if (def.kind === 'hold') return last.sets.every((s) => s.seconds >= s.targetSec)
-  return last.sets.every((s) => s.reps >= REPS.max)
-}
+const top = (sets) => Math.max(...sets.map((s) => s.weightLb))
+const targetReps = (s) => s.targetReps ?? REPS.prefill
 
-function upWeight(def, sets) {
-  const top = Math.max(...sets.map((s) => s.weightLb))
-  if (top === 0 && def.firstStepLb) return def.firstStepLb
-  return top + INCREMENT_LB[def.kind]
+// 'weight' when the increment is a small enough share of last session's top weight,
+// otherwise 'reps' (see program.js). Hip thrust's first step from 0 is a weight step.
+export function progressionRule(def, sets) {
+  const t = top(sets)
+  if (t === 0 && def.firstStepLb) return 'weight'
+  // In whole percents, so 2.5 lb on 25 lb is exactly 10%, with no rounding.
+  return INCREMENT_LB[def.kind] * 100 <= t * WEIGHT_STEP_MAX_PERCENT ? 'weight' : 'reps'
 }
 
 const fill = (n, set) => Array.from({ length: n }, () => ({ ...set }))
 
 // What each set starts as on this day. Numbers, with weightLb null for a machine
-// that has never been logged. Reps always start at REPS.prefill. { up, sets, lastDayKey }
+// that has never been logged. { up, sets, lastDayKey }; up means more weight, reps or time.
 export function prefill(store, def, dayKey) {
   const n = SETS
   const last = lastTime(store, def.id, dayKey)
-  const hold = def.kind === 'hold'
   if (!last) {
-    return { up: false, lastDayKey: null, sets: fill(n, hold ? { seconds: def.startSec } : { weightLb: def.startLb, reps: REPS.prefill }) }
+    return { up: false, lastDayKey: null, sets: fill(n, def.kind === 'hold' ? { seconds: def.startSec } : { weightLb: def.startLb, reps: REPS.prefill }) }
   }
-  if (earnedUp(def, last)) {
-    const sets = hold
-      ? fill(n, { seconds: Math.max(...last.sets.map((s) => s.targetSec)) + HOLD_INCREMENT_SEC })
-      : fill(n, { weightLb: upWeight(def, last.sets), reps: REPS.prefill })
-    return { up: true, lastDayKey: last.dayKey, sets }
+  // Set by set from last time; sets beyond those logged copy the last one.
+  const each = (fn) => Array.from({ length: n }, (_, i) => fn(last.sets[Math.min(i, last.sets.length - 1)]))
+  const up = (sets) => ({ up: true, lastDayKey: last.dayKey, sets })
+  const same = (sets) => ({ up: false, lastDayKey: last.dayKey, sets })
+
+  // A hold: every logged hold reached its target, however many were logged.
+  if (def.kind === 'hold') {
+    const target = Math.max(...last.sets.map((s) => s.targetSec))
+    if (last.sets.every((s) => s.seconds >= s.targetSec)) return up(fill(n, { seconds: target + HOLD_INCREMENT_SEC }))
+    return same(each((s) => ({ seconds: s.targetSec })))
   }
-  // Same weight as last time, set by set. Extra sets copy the last one. A hold that
-  // fell short keeps the same target, like a weight that keeps the same pounds.
-  const sets = Array.from({ length: n }, (_, i) => {
-    const s = last.sets[Math.min(i, last.sets.length - 1)]
-    return hold ? { seconds: s.targetSec } : { weightLb: s.weightLb, reps: REPS.prefill }
-  })
-  return { up: false, lastDayKey: last.dayKey, sets }
+
+  // A lift: anything short (a missing set, or reps under the target) repeats the same numbers.
+  const repeat = same(each((s) => ({ weightLb: s.weightLb, reps: targetReps(s) })))
+  if (last.sets.length < SETS) return repeat
+  const inc = INCREMENT_LB[def.kind]
+
+  if (progressionRule(def, last.sets) === 'weight') {
+    if (!last.sets.every((s) => s.reps >= REPS.up)) return repeat
+    const t = top(last.sets)
+    return up(fill(n, { weightLb: t === 0 && def.firstStepLb ? def.firstStepLb : t + inc, reps: REPS.prefill }))
+  }
+
+  if (last.sets.every((s) => s.reps >= REPS.cap)) return up(each((s) => ({ weightLb: s.weightLb + inc, reps: REPS.prefill })))
+  if (last.sets.every((s) => s.reps >= targetReps(s))) return up(each((s) => ({ weightLb: s.weightLb, reps: Math.min(targetReps(s) + 1, REPS.cap) })))
+  return repeat
 }
 
 // ---- Draft: what the Workout screen edits. Numbers are strings, as typed. ----
 // { dayKey, workout, byWorkout: { A: [DraftExercise], B: [...] }, walk: { min, done }, restEndsAt }
-//   DraftExercise: { id, up, sets: [{ weight, reps, done } | { seconds, target, done }] }
+//   DraftExercise: { id, up, sets: [{ weight, reps, target?, done } | { seconds, target, done }] }
+//   target is what was prefilled (reps or seconds).
 
-const toDraftSet = (s, done) =>
+// A prefilled set, not done yet.
+const fromPrefill = (s) =>
   'seconds' in s
-    ? { seconds: String(s.seconds), target: s.targetSec ?? s.seconds, done }
-    : { weight: s.weightLb === null ? '' : String(s.weightLb), reps: String(s.reps), done }
+    ? { seconds: String(s.seconds), target: s.seconds, done: false }
+    : { weight: s.weightLb === null ? '' : String(s.weightLb), reps: String(s.reps), target: s.reps, done: false }
+
+// A saved set, done. Older lift sets have no target, and keep none.
+const fromSaved = (s) =>
+  'seconds' in s
+    ? { seconds: String(s.seconds), target: s.targetSec, done: true }
+    : { weight: String(s.weightLb), reps: String(s.reps), ...('targetReps' in s ? { target: s.targetReps } : {}), done: true }
 
 // The exercise list for one workout on one day. A saved session for the same workout
 // shows what was saved (as done), followed by any remaining planned sets.
@@ -176,15 +197,15 @@ export function buildExercises(store, dayKey, workout) {
   const savedById = saved?.workout === workout ? new Map(saved.exercises.map((e) => [e.id, e])) : new Map()
   const listed = WORKOUTS[workout].map((def) => {
     const pf = prefill(store, def, dayKey)
-    const done = (savedById.get(def.id)?.sets ?? []).map((s) => toDraftSet(s, true))
-    const rest = pf.sets.slice(done.length).map((s) => toDraftSet(s, false))
+    const done = (savedById.get(def.id)?.sets ?? []).map(fromSaved)
+    const rest = pf.sets.slice(done.length).map(fromPrefill)
     return { id: def.id, up: pf.up, sets: [...done, ...rest] }
   })
   // Exercises saved earlier but since removed from the program are kept, not dropped.
   const ids = new Set(WORKOUTS[workout].map((d) => d.id))
   const retired = [...savedById.values()]
     .filter((e) => !ids.has(e.id))
-    .map((e) => ({ id: e.id, up: false, sets: e.sets.map((s) => toDraftSet(s, true)) }))
+    .map((e) => ({ id: e.id, up: false, sets: e.sets.map(fromSaved) }))
   return [...listed, ...retired]
 }
 
@@ -230,7 +251,7 @@ export function parseSet(s) {
   if (weightLb === null) return { error: `enter a weight from 0 to ${MAX_WEIGHT_LB} lb`, field: 'weight' }
   const reps = parseWhole(s.reps, MAX_REPS)
   if (reps === null) return { error: `enter reps from 1 to ${MAX_REPS}`, field: 'reps' }
-  return { set: { weightLb, reps } }
+  return { set: { weightLb, reps, ...(Number.isInteger(s.target) ? { targetReps: s.target } : {}) } }
 }
 
 export const draftHasDone = (draft) => draft.walk.done || draft.byWorkout[draft.workout].some((e) => e.sets.some((s) => s.done))

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { WORKOUTS, GYM_WEEKDAYS, INCREMENT_LB, HOLD_INCREMENT_SEC, REPS, SETS } from '../src/program.js'
+import { WORKOUTS, GYM_WEEKDAYS, INCREMENT_LB, HOLD_INCREMENT_SEC, REPS, SETS, WEIGHT_STEP_MAX_PERCENT } from '../src/program.js'
 
 const all = Object.values(WORKOUTS).flat()
 
@@ -27,7 +27,8 @@ test('every exercise has a valid kind and start value', () => {
 test('rules are sensible', () => {
   assert.ok(GYM_WEEKDAYS.every((d) => Number.isInteger(d) && d >= 0 && d <= 6))
   assert.ok(INCREMENT_LB.dumbbell > 0 && INCREMENT_LB.machine > 0 && HOLD_INCREMENT_SEC > 0)
-  assert.ok(REPS.min <= REPS.prefill && REPS.prefill <= REPS.max)
+  assert.ok([REPS.up, REPS.prefill, REPS.cap].every((n) => Number.isInteger(n) && n >= 1) && REPS.prefill <= REPS.cap)
+  assert.ok(WEIGHT_STEP_MAX_PERCENT > 0)
   assert.ok(Number.isInteger(SETS) && SETS >= 1)
 })
 
@@ -42,6 +43,7 @@ test('the starting program matches what was asked for', () => {
   ])
   assert.deepEqual(brief(WORKOUTS.B), [
     ['Goblet squat', 'dumbbell', 15],
+    ['Chest press', 'machine', null],
     ['Seated cable row', 'machine', null],
     ['Dumbbell shoulder press', 'dumbbell', 7.5],
     ['Hip thrust', 'dumbbell', 0],
@@ -52,4 +54,7 @@ test('the starting program matches what was asked for', () => {
   assert.deepEqual(INCREMENT_LB, { dumbbell: 2.5, machine: 5 })
   assert.equal(SETS, 3)
   assert.equal(REPS.prefill, 9)
+  assert.equal(REPS.up, 9)
+  assert.equal(REPS.cap, 12)
+  assert.equal(WEIGHT_STEP_MAX_PERCENT, 10)
 })

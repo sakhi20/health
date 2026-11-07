@@ -60,6 +60,7 @@ function setProblem(s) {
     return null
   }
   if (!isWholeIn(s.reps, 1, MAX_REPS)) return 'has invalid reps'
+  if ('targetReps' in s && !isWholeIn(s.targetReps, 1, MAX_REPS)) return 'has an invalid target'
   if (typeof s.weightLb !== 'number' || !Number.isFinite(s.weightLb) || s.weightLb < 0 || s.weightLb > MAX_WEIGHT_LB) {
     return 'has an invalid weight'
   }
@@ -90,7 +91,11 @@ const cleanSession = (s) => ({
   workout: s.workout,
   exercises: s.exercises.map((ex) => ({
     id: ex.id,
-    sets: ex.sets.map((x) => ('seconds' in x ? { seconds: x.seconds, targetSec: x.targetSec } : { weightLb: x.weightLb, reps: x.reps })),
+    sets: ex.sets.map((x) =>
+      'seconds' in x
+        ? { seconds: x.seconds, targetSec: x.targetSec }
+        : { weightLb: x.weightLb, reps: x.reps, ...('targetReps' in x ? { targetReps: x.targetReps } : {}) },
+    ),
   })),
   walkMin: s.walkMin,
   loggedAt: s.loggedAt,

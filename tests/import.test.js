@@ -278,7 +278,7 @@ function importAll(text) {
 const sessionA = (updatedAt, reps = 10) => ({
   workout: 'A',
   exercises: [
-    { id: 'dumbbell-bench-press', sets: [{ weightLb: 12.5, reps }, { weightLb: 12.5, reps: 8 }] },
+    { id: 'dumbbell-bench-press', sets: [{ weightLb: 12.5, reps, targetReps: 9 }, { weightLb: 12.5, reps: 8 }] }, // second: logged before targets
     { id: 'plank', sets: [{ seconds: 20, targetSec: 20 }] },
   ],
   walkMin: 10,
@@ -384,6 +384,8 @@ test('malformed workouts reject the whole file and change nothing', () => {
     w({ '2026-11-03': withSet({ weightLb: -1, reps: 8 }) }),
     w({ '2026-11-03': withSet({ weightLb: '35', reps: 8 }) }),
     w({ '2026-11-03': withSet({ reps: 8 }) }),
+    w({ '2026-11-03': withSet({ weightLb: 35, reps: 8, targetReps: 0 }) }),
+    w({ '2026-11-03': withSet({ weightLb: 35, reps: 8, targetReps: '9' }) }),
     w({ '2026-11-03': withSet({ seconds: 20 }) }),
     w({ '2026-11-03': withSet({ seconds: 0, targetSec: 20 }) }),
   ]
